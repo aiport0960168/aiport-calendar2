@@ -177,6 +177,7 @@ def generate_html(events, updated_str, week_start, week_end):
     <button class="tab-btn active" onclick="setTab('all', this)">すべて</button>
     <button class="tab-btn" onclick="setTab('イベントコーナー', this)">イベントコーナー</button>
     <button class="tab-btn" onclick="setTab('会議セミナー室', this)">会議セミナー室</button>
+    <button class="tab-btn" onclick="setTab('イベントコーナー・会議セミナー室', this)">イベントコーナー・会議セミナー室</button>
     <button class="tab-btn" onclick="setTab('その他・未記載', this)">その他</button>
   </div>
 
@@ -282,13 +283,15 @@ def _disp_width(text):
     return sum(1.0 if unicodedata.east_asian_width(c) in ("W", "F") else 0.5 for c in text)
 
 
-def _balanced_lines(text, body_size):
+def _balanced_lines(text, body_size, label_units=6):
     """長い文字列を行末に孤立文字が出ないようバランスよく分ける"""
-    cap = max(8, int(139 / (body_size * 0.3528)) - 7)
+    cap = 139 / (body_size * 0.3528) - label_units
     if _disp_width(text) <= cap:
         return [text]
-    no_head = set("」』）)］｝、。．，．・：；？！…―〉》々")
+    no_head = set("」』）)］｝、。．，．・：；？！…―〉》々ゃゅょっぁぃぅぇぉゎー")
     no_tail = set("「『（(［｛〈《")
+    natural_after = set("・、。，．／/ 」』）)】")
+    natural_before = set("「『（(【")
     chars = list(text)
     widths = []
     w = 0.0
@@ -300,7 +303,7 @@ def _balanced_lines(text, body_size):
     target = total / 2
 
     def find_split(use_kinsoku):
-        best_i, best_d = None, None
+        best_i, best_score = None, None
         for i in range(1, len(chars)):
             w1 = widths[i - 1]
             w2 = total - w1
@@ -308,9 +311,11 @@ def _balanced_lines(text, body_size):
                 continue
             if use_kinsoku and (chars[i] in no_head or chars[i - 1] in no_tail):
                 continue
-            d = abs(w1 - target)
-            if best_d is None or d < best_d:
-                best_d, best_i = d, i
+            score = abs(w1 - target)
+            if chars[i - 1] not in natural_after and chars[i] not in natural_before:
+                score += 3.0
+            if best_score is None or score < best_score:
+                best_score, best_i = score, i
         return best_i
 
     i = find_split(True)
@@ -321,7 +326,7 @@ def _balanced_lines(text, body_size):
     line1 = text[:i]
     rest = text[i:]
     if _disp_width(rest) > cap:
-        return [line1] + _balanced_lines(rest, body_size)
+        return [line1] + _balanced_lines(rest, body_size, 0)
     return [line1, rest]
 
 
@@ -442,8 +447,8 @@ def _fit_sizes(event_col, seminar_col):
         lines = 0
         for e in events:
             lines += 1
-            lines += len(_balanced_lines(e.get("org", ""), body))
-            lines += len(_balanced_lines(e.get("title", ""), body))
+            lines += len(_balanced_lines(e.get("org", ""), body, 6))
+            lines += len(_balanced_lines(e.get("title", ""), body, 7))
             lines += 1
         return lines
 
@@ -457,6 +462,19 @@ def _fit_sizes(event_col, seminar_col):
     body = 30.0
     while body > 9.5 and total_height(body) > usable:
         body -= 0.5
+    # 1行に収まる行は割らない：全行が1行に収まる最大サイズを優先する
+    limit = 30.0
+    for e in event_col + seminar_col:
+        for lu, value in ((6, e.get("org", "")), (7, e.get("title", "")),
+                          (6, e.get("fee", ""))):
+            w = lu + _disp_width(value)
+            if w > 0:
+                limit = min(limit, 139 / (w * 0.3528))
+        w = 1.0 + _disp_width(e.get("time", ""))
+        limit = min(limit, 139 / (w * 0.3528))
+    no_split = int(limit * 2) / 2
+    if no_split >= 15:
+        body = min(body, no_split)
     return (date_pt, head_pt, body)
 
 
@@ -577,9 +595,9 @@ def generate_weekly_docx(events, week_start):
                 time_run = time_p.add_run("◎" + e.get("time", ""))
                 time_run.bold = True
                 time_run.font.size = Pt(body_size)
-                for label, value in (("・使用団体：", e.get("org", "")),
-                                     ("・内" + fsp * 3 + "容：", e.get("title", ""))):
-                    parts = _balanced_lines(value, body_size)
+                for label, value, lu in (("・使用団体：", e.get("org", ""), 6),
+                                         ("・内" + fsp * 3 + "容：", e.get("title", ""), 7)):
+                    parts = _balanced_lines(value, body_size, lu)
                     for j, part in enumerate(parts):
                         body_p = cell.add_paragraph()
                         body_run = body_p.add_run((label if j == 0 else "") + part)
