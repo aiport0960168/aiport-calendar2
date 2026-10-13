@@ -102,9 +102,12 @@ def fetch_detail_info(session, detail_url):
         return {"time": "", "room": "その他・未記載", "place": "", "org": "", "fee": ""}
 
 
-def generate_html(events, updated_str):
+def generate_html(events, updated_str, week_start, week_end):
     events_json = json.dumps(events, ensure_ascii=False)
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
+    wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
+    week_label = (f"{week_start.month}月{week_start.day}日（{wd_jp[week_start.weekday()]}）"
+                  f"〜{week_end.month}月{week_end.day}日（{wd_jp[week_end.weekday()]}）")
     html = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -149,7 +152,8 @@ def generate_html(events, updated_str):
     <a class="btn-update" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
     <a class="btn-docx" href="weekly.docx" download>📄 週報ダウンロード（Word）</a>
   </div>
-  <p class="update-note">※「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。週報は次の月曜〜日曜の7日分（1日1ページ）です。</p>
+  <p class="update-note">※「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
+  <p class="update-note">※週報は次の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌々週分に切り替わります。今ダウンロードできるのは{week_label}分です。</p>
 
   <div class="filters">
     <div class="filter-group">
@@ -416,9 +420,10 @@ def main():
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
     updated_str = now.strftime("%Y-%m-%d %H:%M")
-    generate_html(all_events, updated_str)
+    week_start = _report_monday(now)
+    week_end = week_start + datetime.timedelta(days=6)
+    generate_html(all_events, updated_str, week_start, week_end)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
-    week_start = _next_monday(now)
     generate_weekly_docx(all_events, week_start)
     print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
 
@@ -435,10 +440,13 @@ def _day_font_sizes(n_blocks):
     return (18, 14, 12)
 
 
-def _next_monday(now):
-    """次の月曜日の日付を返す（当日が月曜の場合は当日）"""
+def _report_monday(now):
+    """週報対象週の月曜日。木曜17時以降〜日曜は翌々週の月曜にする。"""
     days_ahead = (7 - now.weekday()) % 7
-    return (now + datetime.timedelta(days=days_ahead)).date()
+    monday = (now + datetime.timedelta(days=days_ahead)).date()
+    if (now.weekday() == 3 and now.hour >= 17) or now.weekday() in (4, 5, 6):
+        monday += datetime.timedelta(days=7)
+    return monday
 
 
 # 見本docxと同じ和文フォント（名称に半角カナを含むためエスケープ表記）
