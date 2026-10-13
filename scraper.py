@@ -107,6 +107,7 @@ def fetch_detail_info(session, detail_url):
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end):
     events_json = json.dumps(events, ensure_ascii=False)
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
+    only_label = "「" + LB + "中止" + RB + "」だけを表示"
     wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
     week_label = (f"{week_start.month}月{week_start.day}日（{wd_jp[week_start.weekday()]}）"
                   f"〜{week_end.month}月{week_end.day}日（{wd_jp[week_end.weekday()]}）")
@@ -176,8 +177,9 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
       <label>キーワード検索（タイトル・団体名・時間）</label>
       <input type="text" id="keyword" placeholder="スペース区切りで複数検索（例: 囲碁 相談）">
     </div>
-    <div class="filter-group" style="display:flex; align-items:flex-end; padding-bottom:6px;">
+    <div class="filter-group" style="display:flex; align-items:flex-end; padding-bottom:6px; gap:16px;">
       <label style="cursor:pointer; margin:0;"><input type="checkbox" id="hideCancel" checked> {cancel_label}</label>
+      <label style="cursor:pointer; margin:0;"><input type="checkbox" id="onlyCancel"> {only_label}</label>
     </div>
   </div>
 
@@ -238,12 +240,14 @@ function render() {{
   const kwRaw = document.getElementById('keyword').value.trim().toLowerCase();
   const keywords = kwRaw ? kwRaw.split(/\\s+/) : [];
   const hideCancel = document.getElementById('hideCancel').checked;
+  const onlyCancel = document.getElementById('onlyCancel').checked;
 
   const filtered = events.filter(ev => {{
     if (start && ev.date < start) return false;
     if (end && ev.date > end) return false;
     if (currentTab !== 'all' && !ev.room.includes(currentTab)) return false;
-    if (hideCancel && ev.title.includes('中止')) return false;
+    if (onlyCancel && !ev.title.includes('中止')) return false;
+    if (!onlyCancel && hideCancel && ev.title.includes('中止')) return false;
     if (keywords.length > 0) {{
       const target = (ev.title + ' ' + ev.org + ' ' + ev.time + ' ' + ev.place).toLowerCase();
       if (!keywords.every(k => target.includes(k))) return false;
@@ -269,7 +273,7 @@ function render() {{
   tbody.innerHTML = rows;
 }}
 
-document.querySelectorAll('#startDate, #endDate, #keyword, #hideCancel').forEach(el => {{
+document.querySelectorAll('#startDate, #endDate, #keyword, #hideCancel, #onlyCancel').forEach(el => {{
   el.addEventListener('input', render);
   el.addEventListener('change', render);
 }});
