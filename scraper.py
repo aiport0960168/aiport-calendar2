@@ -432,7 +432,7 @@ def _day_font_sizes(n_blocks):
         return (30, 22, 20)
     if n_blocks <= 3:
         return (24, 18, 15)
-    return (20, 16, 13)
+    return (18, 14, 12)
 
 
 def _next_monday(now):
@@ -554,8 +554,6 @@ def generate_weekly_docx(events, week_start):
                 fee_p = cell.add_paragraph()
                 fee_run = fee_p.add_run("・参 加 費：" + e.get("fee", ""))
                 fee_run.font.size = Pt(body_size)
-                cell.add_paragraph("")
-                cell.add_paragraph("")
 
         if offset < 6:
             doc.add_page_break()
