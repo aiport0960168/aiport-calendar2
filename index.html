@@ -40,7 +40,7 @@
 <body>
 <div class="container">
   <h1>あいぽーと イベントコーナー・会議セミナー室 予定検索</h1>
-  <div class="updated">最終自動更新: 2026-10-13 17:56 （毎日1回自動更新）
+  <div class="updated">最終自動更新: 2026-10-13 18:00 （毎日1回自動更新）
     <a class="btn-update" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
     <a class="btn-docx" href="weekly.docx" download>📄 週報ダウンロード（Word）</a>
     <a class="btn-excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）</a>
@@ -62,8 +62,9 @@
       <label>キーワード検索（タイトル・団体名・時間）</label>
       <input type="text" id="keyword" placeholder="スペース区切りで複数検索（例: 囲碁 相談）">
     </div>
-    <div class="filter-group" style="display:flex; align-items:flex-end; padding-bottom:6px;">
+    <div class="filter-group" style="display:flex; align-items:flex-end; padding-bottom:6px; gap:16px;">
       <label style="cursor:pointer; margin:0;"><input type="checkbox" id="hideCancel" checked> 「【中止】」の予定を隠す</label>
+      <label style="cursor:pointer; margin:0;"><input type="checkbox" id="onlyCancel"> 「【中止】」だけを表示</label>
     </div>
   </div>
 
@@ -124,12 +125,14 @@ function render() {
   const kwRaw = document.getElementById('keyword').value.trim().toLowerCase();
   const keywords = kwRaw ? kwRaw.split(/\s+/) : [];
   const hideCancel = document.getElementById('hideCancel').checked;
+  const onlyCancel = document.getElementById('onlyCancel').checked;
 
   const filtered = events.filter(ev => {
     if (start && ev.date < start) return false;
     if (end && ev.date > end) return false;
     if (currentTab !== 'all' && !ev.room.includes(currentTab)) return false;
-    if (hideCancel && ev.title.includes('中止')) return false;
+    if (onlyCancel && !ev.title.includes('中止')) return false;
+    if (!onlyCancel && hideCancel && ev.title.includes('中止')) return false;
     if (keywords.length > 0) {
       const target = (ev.title + ' ' + ev.org + ' ' + ev.time + ' ' + ev.place).toLowerCase();
       if (!keywords.every(k => target.includes(k))) return false;
@@ -155,7 +158,7 @@ function render() {
   tbody.innerHTML = rows;
 }
 
-document.querySelectorAll('#startDate, #endDate, #keyword, #hideCancel').forEach(el => {
+document.querySelectorAll('#startDate, #endDate, #keyword, #hideCancel, #onlyCancel').forEach(el => {
   el.addEventListener('input', render);
   el.addEventListener('change', render);
 });
