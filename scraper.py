@@ -152,8 +152,8 @@ def generate_html(events, updated_str, week_start, week_end):
     <a class="btn-update" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
     <a class="btn-docx" href="weekly.docx" download>📄 週報ダウンロード（Word）</a>
   </div>
-  <p class="update-note">※「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
-  <p class="update-note">※週報は次の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌々週分に切り替わります。今ダウンロードできるのは{week_label}分です。</p>
+  <p class="update-note">※データは毎朝6時00分に自動更新されます。「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
+  <p class="update-note">※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。今ダウンロードできるのは{week_label}分です。</p>
 
   <div class="filters">
     <div class="filter-group">
@@ -479,9 +479,8 @@ def _fit_sizes(event_col, seminar_col):
 
 
 def _report_monday(now):
-    """週報対象週の月曜日。木曜17時以降〜日曜は翌々週の月曜にする。"""
-    days_ahead = (7 - now.weekday()) % 7
-    monday = (now + datetime.timedelta(days=days_ahead)).date()
+    """週報対象週の月曜日。基本は今週の月曜、木曜17時以降〜日曜は翌週の月曜にする。"""
+    monday = (now - datetime.timedelta(days=now.weekday())).date()
     if (now.weekday() == 3 and now.hour >= 17) or now.weekday() in (4, 5, 6):
         monday += datetime.timedelta(days=7)
     return monday
