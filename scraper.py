@@ -9,6 +9,8 @@ from bs4 import BeautifulSoup
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.enum.section import WD_ORIENT
+from docx.shared import Mm
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 CACHE_PATH = "cache.json"
@@ -376,8 +378,12 @@ def _next_monday(now):
     return (now + datetime.timedelta(days=days_ahead)).date()
 
 
+# 見本docxと同じ和文フォント（名称に半角カナを含むためエスケープ表記）
+JP_FONT = "HGP創英角\uff7a\uff9e\uff7c\uff6f\uff78UB"
+
+
 def _set_jp_font(doc):
-    """文書全体の既定フォントを游ゴシックにする"""
+    """文書全体の既定フォントを見本と同じにする"""
     style_el = doc.styles["Normal"].element
     rpr = style_el.find(qn("w:rPr"))
     if rpr is None:
@@ -387,16 +393,24 @@ def _set_jp_font(doc):
     if rfonts is None:
         rfonts = OxmlElement("w:rFonts")
         rpr.append(rfonts)
-    rfonts.set(qn("w:ascii"), "Yu Gothic")
-    rfonts.set(qn("w:hAnsi"), "Yu Gothic")
-    rfonts.set(qn("w:eastAsia"), "游ゴシック")
-    rfonts.set(qn("w:cs"), "Yu Gothic")
+    rfonts.set(qn("w:ascii"), "Meiryo UI")
+    rfonts.set(qn("w:hAnsi"), "Meiryo UI")
+    rfonts.set(qn("w:eastAsia"), JP_FONT)
+    rfonts.set(qn("w:cs"), "Meiryo UI")
 
 
 def generate_weekly_docx(events, week_start):
     """次の月曜〜日曜の7日分を1日1ページのWord文書（weekly.docx）に出力する"""
     doc = Document()
     _set_jp_font(doc)
+    section = doc.sections[0]
+    section.page_width = Mm(297)
+    section.page_height = Mm(210)
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.top_margin = Mm(13)
+    section.bottom_margin = Mm(13)
+    section.left_margin = Mm(5)
+    section.right_margin = Mm(5)
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
     fsp = "\u3000"
 
