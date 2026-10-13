@@ -171,7 +171,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>あいぽーと 予定検索システム</title>
+<title>あいぽーとセンター業務ポータル</title>
 <style>
   * {{ box-sizing: border-box; }}
   body {{ font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif; background: #eef2f7; color: #1e293b; margin: 0; padding: 20px 12px 40px; }}
@@ -179,6 +179,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .app-header {{ background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; border-radius: 14px; padding: 22px 26px; box-shadow: 0 4px 14px rgba(30,58,138,0.25); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }}
   .app-header h1 {{ margin: 0 0 6px; font-size: 1.45rem; }}
   .updated {{ font-size: 0.85rem; opacity: 0.92; }}
+  .subtitle {{ font-size: 0.85rem; opacity: 0.85; margin-bottom: 4px; }}
   .btn-update-sm {{ background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.65); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 0.82rem; font-weight: bold; text-decoration: none; white-space: nowrap; }}
   .btn-update-sm:hover {{ background: rgba(255,255,255,0.3); }}
   .filters-head {{ grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }}
@@ -263,7 +264,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
 <div class="container">
   <header class="app-header">
     <div>
-      <h1>あいぽーと イベントコーナー・会議セミナー室 予定検索</h1>
+      <h1>あいぽーとセンター業務ポータル</h1>
+      <div class="subtitle">予定検索・空き状況確認・各種出力（週報／あいぽーと通信／ラジオ原稿）</div>
       <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）</div>
     </div>
     <a class="btn-update-sm" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
