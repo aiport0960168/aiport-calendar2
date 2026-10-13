@@ -3,6 +3,7 @@ import time
 import os
 import re
 import json
+import random
 import unicodedata
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
@@ -12,7 +13,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Mm, Pt
+from docx.shared import Mm, Pt, RGBColor
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
@@ -144,9 +145,20 @@ def fetch_availability_day(session, target_date):
     return None
 
 
-def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None):
+def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
     events_json = json.dumps(events, ensure_ascii=False)
     availability_json = json.dumps(availability or {}, ensure_ascii=False)
+    radio_label = ""
+    radio_card = ""
+    radio_note = ""
+    if radio_monday:
+        wd_jp_r = ["月", "火", "水", "木", "金", "土", "日"]
+        radio_label = f"{radio_monday.month}月{radio_monday.day}日（{wd_jp_r[radio_monday.weekday()]}）"
+    if radio_monday and radio_filename:
+        radio_card = (f'<a class="action-card radio" href="{radio_filename}" download>'
+                      f'📻 ラジオ原稿ダウンロード（Word）<span>対象: {radio_label}放送分</span></a>')
+        radio_note = (f'<p>※ラジオ原稿は月曜放送分です。毎週水曜17時に翌週分へ切り替わります。'
+                      f'今ダウンロードできるのは{radio_label}放送分です。</p>')
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
     only_label = "「" + LB + "中止" + RB + "」だけを表示"
     wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
@@ -179,6 +191,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .action-card:hover {{ box-shadow: 0 4px 14px rgba(15,23,42,0.14); }}
   .action-card.docx {{ border-left-color: #16a34a; }}
   .action-card.excel {{ border-left-color: #217346; }}
+  .action-card.radio {{ border-left-color: #d97706; }}
   .info-box {{ background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }}
   .info-box p {{ margin: 3px 0; font-size: 0.8rem; color: #475569; }}
   .card {{ background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
@@ -259,12 +272,14 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   <div class="actions">
     <a class="action-card docx" href="weekly.docx" download>📄 週報ダウンロード（Word）<span>対象: {week_label}分</span></a>
     <a class="action-card excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）<span>対象: {period_label}分</span></a>
+    {radio_card}
   </div>
 
   <div class="info-box">
     <p>※データは毎朝6時00分に自動更新されます。手動で更新する場合は右上の「最新情報に更新」から、GitHubのページで「Run workflow」を押してください。</p>
     <p>※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。</p>
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
+    {radio_note}
   </div>
 
   <div class="card avail-card">
@@ -673,12 +688,26 @@ def main():
             day += datetime.timedelta(days=1)
     print(f"空き状況: {len(availability)}日分を取得しました。")
 
+    radio_monday = _radio_monday(now)
+    radio_history = dict(_RADIO_SEED)
+    if os.path.exists(RADIO_HISTORY_PATH):
+        try:
+            with open(RADIO_HISTORY_PATH, encoding="utf-8") as f:
+                radio_history.update(json.load(f))
+        except Exception as e:
+            print(f"ラジオ履歴の読み込み失敗: {e}")
+    radio_picks = prepare_radio_picks(all_events, radio_monday, radio_history)
+    with open(RADIO_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(radio_history, f, ensure_ascii=False, indent=2)
+    radio_filename = generate_radio_docx(radio_picks, radio_monday)
+    print(f"ラジオ原稿: {radio_monday}放送分を {radio_filename} に出力しました。")
+
     updated_str = now.strftime("%Y-%m-%d %H:%M")
     week_start = _report_monday(now)
     week_end = week_start + datetime.timedelta(days=6)
     period_start = _newsletter_period_start(now)
     period_end = _period_end(period_start)
-    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end, availability)
+    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end, availability, radio_monday, radio_filename)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
     generate_weekly_docx(all_events, week_start)
     print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
@@ -768,6 +797,213 @@ def _report_monday(now):
     if (now.weekday() == 3 and now.hour >= 17) or now.weekday() in (4, 5, 6):
         monday += datetime.timedelta(days=7)
     return monday
+
+
+def _radio_monday(now):
+    """ラジオ原稿の対象放送日（月曜）。水曜17時以降は翌週の月曜にする。"""
+    monday = (now - datetime.timedelta(days=now.weekday())).date()
+    if (now.weekday() == 2 and now.hour >= 17) or now.weekday() in (3, 4, 5, 6):
+        monday += datetime.timedelta(days=7)
+    return monday
+
+
+RADIO_HISTORY_PATH = "radio_history.json"
+RADIO_GREEN = RGBColor(0x00, 0xB0, 0x50)
+RADIO_RED = RGBColor(0xFF, 0x00, 0x00)
+RADIO_FONT = "Meiryo UI"
+
+# 過去に手作業で作った原稿の履歴（履歴ファイルが無い期間の種データ）
+_RADIO_SEED = {
+    "2026-09-14": [
+        {"org": "ヨガ健康クラブ", "title": "初心者向けヨガレッスン"},
+        {"org": "世界の民族舞踊ペガサス", "title": "世界各地の民族の踊りを楽しもう"},
+        {"org": "NPO法人でんでん虫の会", "title": "コミュニケーション交流"},
+        {"org": "スマイリー健＆アロハ・スターハワイアンズ", "title": "ウクレレの弾き方等のレクチャー"},
+        {"org": "シニアクラブうらら", "title": "シニアフィットネス・出前講座"},
+        {"org": "NPO法人熊本わくわく体操ボランティア協会", "title": "歌謡曲・ナツメロ・流行歌・童謡に合わせてリズミカルに体を動かすイス腰掛け福祉体操"},
+        {"org": "さわやか南京玉すだれを楽しむ会", "title": "南京玉すだれの公演と体験会"},
+    ],
+    "2026-10-12": [
+        {"org": "エンジョイズ", "title": "童謡・唱歌・懐かしい流行歌を楽しむ会"},
+        {"org": "楽しいオリガミ", "title": "折紙製作勉強会"},
+        {"org": "KKA高齢者健康友の会", "title": "みんな笑顔で楽しく健康体操"},
+        {"org": "NPO法人傾聴ネットキーステーション", "title": "傾聴カフェ、花ことば"},
+        {"org": "令和9年度助成事業説明会", "title": "令和9年度助成事業説明会"},
+        {"org": "くまもと学生ボランティアFESTA2026", "title": "くまもと学生ボランティアFESTA2026"},
+        {"org": "あいぽーとFESTIVAL2026", "title": "つなぐ・つなげるあいぽーと"},
+    ],
+    "2026-10-19": [
+        {"org": "フラ・オ・レアレア", "title": "フラダンスレッスン"},
+        {"org": "囲碁普及会", "title": "囲碁の対局・初心者の指導と研究"},
+        {"org": "楽画喜の会", "title": "絵画制作活動"},
+        {"org": "NPO法人成年後見安心サポートネット熊本", "title": "成年後見無料相談会"},
+        {"org": "熊本健康マージャン協会", "title": "マージャン協会の座談会の打合せ"},
+        {"org": "ほっとステージBINGO", "title": "ベビーマッサージ教室"},
+        {"org": "fit(0-0)フィットれいわ", "title": "写真整理で交流会"},
+    ],
+}
+
+
+def _radio_candidates(events, date_str, excluded_orgs, used_orgs):
+    cands = [e for e in events
+             if e.get("date") == date_str
+             and "中止" not in e.get("title", "")
+             and e.get("org")
+             and e["org"] not in excluded_orgs
+             and e["org"] not in used_orgs]
+    free = [e for e in cands if (e.get("fee") or "").strip() == "無料"]
+    return free or cands
+
+
+def _pick_radio_events(events, monday, excluded_orgs, rng):
+    picks = []
+    used = set()
+    for i in range(7):
+        day_str = (monday + datetime.timedelta(days=i)).isoformat()
+        pool = _radio_candidates(events, day_str, excluded_orgs, used)
+        if pool:
+            chosen = rng.choice(pool)
+            used.add(chosen["org"])
+            picks.append({"org": chosen["org"], "title": chosen["title"]})
+        else:
+            picks.append({"org": "", "title": ""})
+    return picks
+
+
+def _radio_pick_still_valid(events, monday, idx, pick):
+    if not pick.get("org"):
+        return False
+    day_str = (monday + datetime.timedelta(days=idx)).isoformat()
+    for e in events:
+        if (e.get("date") == day_str and e.get("org") == pick["org"]
+                and e.get("title") == pick["title"] and "中止" not in e.get("title", "")):
+            return True
+    return False
+
+
+def prepare_radio_picks(events, monday, history):
+    """対象週の選定を返す。履歴にあれば再利用（無効になった日だけ再選定）、無ければ新規にランダム選定して履歴へ記録。"""
+    key = monday.isoformat()
+    past_keys = sorted(k for k in history if k < key)
+    excluded = set()
+    for k in past_keys[-2:]:
+        for p in history[k]:
+            if p.get("org"):
+                excluded.add(p["org"])
+    rng = random.Random(key)
+    if key in history:
+        picks = [dict(p) for p in history[key]]
+        used = {p["org"] for p in picks if p.get("org")}
+        for i, p in enumerate(picks):
+            if not _radio_pick_still_valid(events, monday, i, p):
+                old_org = p.get("org")
+                pool = _radio_candidates(events, (monday + datetime.timedelta(days=i)).isoformat(),
+                                         excluded, used - {old_org})
+                if pool:
+                    chosen = rng.choice(pool)
+                    picks[i] = {"org": chosen["org"], "title": chosen["title"]}
+                    used.discard(old_org)
+                    used.add(chosen["org"])
+                else:
+                    picks[i] = {"org": "", "title": ""}
+        history[key] = picks
+        return picks
+    picks = _pick_radio_events(events, monday, excluded, rng)
+    history[key] = picks
+    return picks
+
+
+def generate_radio_docx(picks, monday):
+    """ラジオ原稿（朝リズム Let's go あいぽーと）をWordで生成し、ファイル名を返す。"""
+    filename = f"letsgo_{monday:%m%d}.docx"
+    date_label = f"{monday.month}/{monday.day}"
+    black = RGBColor(0, 0, 0)
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Pt(36)
+        section.bottom_margin = Pt(36)
+        section.left_margin = Pt(50)
+        section.right_margin = Pt(50)
+    style = doc.styles["Normal"]
+    style.font.name = RADIO_FONT
+    style.font.size = Pt(11)
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), RADIO_FONT)
+    style.paragraph_format.space_after = Pt(0)
+    style.paragraph_format.space_before = Pt(0)
+
+    def add_run(p, text, color, size=11):
+        r = p.add_run(text)
+        r.font.name = RADIO_FONT
+        r.element.rPr.rFonts.set(qn("w:eastAsia"), RADIO_FONT)
+        r.font.size = Pt(size)
+        r.font.color.rgb = color
+        return r
+
+    tbl = doc.add_table(rows=1, cols=1)
+    tblPr = tbl._tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "6")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), "000000")
+        borders.append(el)
+    tblPr.append(borders)
+    cell = tbl.cell(0, 0)
+    p = cell.paragraphs[0]
+    add_run(p, "國津様", black)
+    p = cell.add_paragraph()
+    add_run(p, "お世話になっております。", black)
+    add_run(p, date_label, RADIO_GREEN)
+    add_run(p, "（月）朝リズム（Let’s go あいぽーと）原稿です。", black)
+    p = cell.add_paragraph()
+    add_run(p, "メールもお送りしております。よろしくお願いします。浦田", black)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(8)
+    add_run(p, date_label, RADIO_GREEN, 18)
+    add_run(p, "（月）放送分", black, 18)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(4)
+    add_run(p, LB + "あいぽーとの紹介" + RB, black).bold = True
+    intro = [
+        "毎週月曜日のこの時間は、「熊本市市民活動支援センター・あいぽーと」に関しての情報をお送りします。",
+        "あいぽーとは、熊本市内で活動されているボランティアやNPOなど、様々な分野の市民活動を支援する総合拠点です。",
+        "活動や交流の場や情報の提供、相談などを行い、これから活動しようと考えている人や、すでに活動に取り組んでいる人を幅広くサポートしています。",
+        "場所は、中央区大江にあるウェルパルくまもと１階です。開館時間は朝８時３０分から夜９時までです。",
+        "尚、NPO法人に関する相談については午前１０時から午後７時までです。",
+        "相談の予約も可能です。",
+        "休館日は、毎月第２木曜日と年末年始です。公共交通機関をご利用の場合は、市電・バスともに「交通局前」下車です。",
+    ]
+    for t in intro:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(2)
+        add_run(p, t, black)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after = Pt(6)
+    add_run(p, "－" * 43, black)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(8)
+    add_run(p, "今週の「あいぽーと」も、様々な分野の団体が活動されますよ。", black)
+    verbs = ["を開催します", "を開催します", "を行います", "を開催します", "を開催します", "などを行います", "を開催します"]
+    wd_names = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"]
+    for i in range(7):
+        pick = picks[i] if i < len(picks) else {"org": "", "title": ""}
+        org = pick.get("org") or "（未定）"
+        title = pick.get("title") or "（未定）"
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(9)
+        add_run(p, wd_names[i] + "は、", black)
+        add_run(p, "「" + org + "」が「" + title + "」" + verbs[i] + "。参加費は無料", RADIO_RED)
+        add_run(p, "です。", black)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(6)
+    add_run(p, "今回ご紹介した団体の開催時間などはあいぽーとへお問い合せ下さい。今回ご紹介した活動以外にも、あいぽーとの場所で活動される団体さんの情報は、あいぽーとのホームページ「あいぽーとカレンダー」で紹介しておりますので、「あいぽーと」とひらがなで検索しご覧ください。", black)
+    doc.save(filename)
+    return filename
 
 
 # 見本docxと同じ和文フォント（名称に半角カナを含むためエスケープ表記）
