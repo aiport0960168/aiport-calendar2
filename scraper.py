@@ -373,6 +373,15 @@ def main():
 WEEKLY_DOCX_PATH = "weekly.docx"
 
 
+def _day_font_sizes(n_blocks):
+    """1列あたりの件数に応じて文字サイズを決める（少ない日ほど大きく、1日1ページ厳守）"""
+    if n_blocks <= 2:
+        return (30, 22, 20)
+    if n_blocks <= 4:
+        return (24, 18, 16)
+    return (20, 16, 13)
+
+
 def _next_monday(now):
     """次の月曜日の日付を返す（当日が月曜の場合は当日）"""
     days_ahead = (7 - now.weekday()) % 7
@@ -399,6 +408,10 @@ def _set_jp_font(doc):
     rfonts.set(qn("w:eastAsia"), JP_FONT)
     rfonts.set(qn("w:cs"), "Meiryo UI")
     doc.styles["Normal"].font.size = Pt(12)
+    pf = doc.styles["Normal"].paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(0)
+    pf.line_spacing = 1.0
 
 
 def _shade_cell(cell, fill):
@@ -434,24 +447,9 @@ def generate_weekly_docx(events, week_start):
         day = week_start + datetime.timedelta(days=offset)
         date_str = day.strftime("%Y-%m-%d")
         wd = weekdays[day.weekday()]
-        day_events = [e for e in events if e.get("date") == date_str]
+        day_events = [e for e in events
+                      if e.get("date") == date_str and "中止" not in e.get("title", "")]
         day_events.sort(key=lambda x: (_start_hour(x.get("time", "")), x.get("time", ""), x.get("id", "")))
-
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        date_run = p.add_run(f"{day.month}月{day.day}日（{wd}）{fsp}◎どなたでも参加できます")
-        date_run.bold = True
-        date_run.font.size = Pt(18)
-
-        table = doc.add_table(rows=2, cols=2)
-        table.style = "Table Grid"
-        for hdr_text, hdr_cell in (("イベントコーナー", table.rows[0].cells[0]),
-                                   ("会議・セミナー室", table.rows[0].cells[1])):
-            hdr_cell.text = hdr_text
-            hdr_run = hdr_cell.paragraphs[0].runs[0]
-            hdr_run.bold = True
-            hdr_run.font.size = Pt(14)
-            _shade_cell(hdr_cell, "D9D9D9")
 
         event_col, seminar_col = [], []
         for e in day_events:
@@ -468,15 +466,37 @@ def generate_weekly_docx(events, week_start):
             else:
                 seminar_col.append(e)
 
+        date_size, head_size, body_size = _day_font_sizes(max(len(event_col), len(seminar_col)))
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        date_run = p.add_run(f"{day.month}月{day.day}日（{wd}）{fsp}◎どなたでも参加できます")
+        date_run.bold = True
+        date_run.font.size = Pt(date_size)
+
+        table = doc.add_table(rows=2, cols=2)
+        table.style = "Table Grid"
+        for hdr_text, hdr_cell in (("イベントコーナー", table.rows[0].cells[0]),
+                                   ("会議・セミナー室", table.rows[0].cells[1])):
+            hdr_cell.text = hdr_text
+            hdr_run = hdr_cell.paragraphs[0].runs[0]
+            hdr_run.bold = True
+            hdr_run.font.size = Pt(head_size)
+            _shade_cell(hdr_cell, "D9D9D9")
+
         for col_events, cell in ((event_col, table.rows[1].cells[0]),
                                  (seminar_col, table.rows[1].cells[1])):
             for e in col_events:
                 time_p = cell.add_paragraph()
                 time_run = time_p.add_run("◎" + e.get("time", ""))
                 time_run.bold = True
-                cell.add_paragraph("・使用団体：" + e.get("org", ""))
-                cell.add_paragraph("・内" + fsp * 3 + "容：" + e.get("title", ""))
-                cell.add_paragraph("・参 加 費：" + e.get("fee", ""))
+                time_run.font.size = Pt(body_size)
+                for line in ("・使用団体：" + e.get("org", ""),
+                             "・内" + fsp * 3 + "容：" + e.get("title", ""),
+                             "・参 加 費：" + e.get("fee", "")):
+                    body_p = cell.add_paragraph()
+                    body_run = body_p.add_run(line)
+                    body_run.font.size = Pt(body_size)
                 cell.add_paragraph("")
 
         if offset < 6:
