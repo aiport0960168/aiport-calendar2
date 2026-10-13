@@ -3,6 +3,7 @@ import time
 import os
 import re
 import json
+import unicodedata
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 from bs4 import BeautifulSoup
@@ -268,6 +269,58 @@ render();
         f.write(html)
 
 
+def _normalize_time(time_str):
+    """「13時～15時」→「13時00分～15時00分」のように、分なしの時刻に00分を補う"""
+    return re.sub(r"(\d+)時(?![\d半])", r"\1時00分", time_str or "")
+
+
+def _disp_width(text):
+    return sum(1.0 if unicodedata.east_asian_width(c) in ("W", "F") else 0.5 for c in text)
+
+
+def _balanced_lines(text, body_size):
+    """長い文字列を行末に孤立文字が出ないようバランスよく分ける"""
+    cap = max(10, int(138 / (body_size * 0.3528)) - 1)
+    if _disp_width(text) <= cap:
+        return [text]
+    no_head = set("」』）)］｝、。．，．・：；？！…―〉》々")
+    no_tail = set("「『（(［｛〈《")
+    chars = list(text)
+    widths = []
+    w = 0.0
+    for c in chars:
+        w += 1.0 if unicodedata.east_asian_width(c) in ("W", "F") else 0.5
+        widths.append(w)
+    total = widths[-1]
+    min_tail = 6.0
+    target = total / 2
+
+    def find_split(use_kinsoku):
+        best_i, best_d = None, None
+        for i in range(1, len(chars)):
+            w1 = widths[i - 1]
+            w2 = total - w1
+            if w1 > cap or w2 < min_tail:
+                continue
+            if use_kinsoku and (chars[i] in no_head or chars[i - 1] in no_tail):
+                continue
+            d = abs(w1 - target)
+            if best_d is None or d < best_d:
+                best_d, best_i = d, i
+        return best_i
+
+    i = find_split(True)
+    if i is None:
+        i = find_split(False)
+    if i is None:
+        return [text]
+    line1 = text[:i]
+    rest = text[i:]
+    if _disp_width(rest) > cap:
+        return [line1] + _balanced_lines(rest, body_size)
+    return [line1, rest]
+
+
 def _start_hour(time_str):
     m = re.search(r"(\d+)\s*時", time_str or "")
     return int(m.group(1)) if m else 99
@@ -342,7 +395,7 @@ def main():
                     "id": event_id,
                     "date": date_str,
                     "weekday": wd_str,
-                    "time": info["time"],
+                    "time": _normalize_time(info["time"]),
                     "room": info["room"],
                     "place": info["place"],
                     "title": full_title,
@@ -491,12 +544,17 @@ def generate_weekly_docx(events, week_start):
                 time_run = time_p.add_run("◎" + e.get("time", ""))
                 time_run.bold = True
                 time_run.font.size = Pt(body_size)
-                for line in ("・使用団体：" + e.get("org", ""),
-                             "・内" + fsp * 3 + "容：" + e.get("title", ""),
-                             "・参 加 費：" + e.get("fee", "")):
-                    body_p = cell.add_paragraph()
-                    body_run = body_p.add_run(line)
-                    body_run.font.size = Pt(body_size)
+                for label, value in (("・使用団体：", e.get("org", "")),
+                                     ("・内" + fsp * 3 + "容：", e.get("title", ""))):
+                    parts = _balanced_lines(value, body_size)
+                    for j, part in enumerate(parts):
+                        body_p = cell.add_paragraph()
+                        body_run = body_p.add_run((label if j == 0 else "") + part)
+                        body_run.font.size = Pt(body_size)
+                fee_p = cell.add_paragraph()
+                fee_run = fee_p.add_run("・参 加 費：" + e.get("fee", ""))
+                fee_run.font.size = Pt(body_size)
+                cell.add_paragraph("")
                 cell.add_paragraph("")
 
         if offset < 6:
