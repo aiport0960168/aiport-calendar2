@@ -6,6 +6,9 @@ import json
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 from bs4 import BeautifulSoup
+from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 CACHE_PATH = "cache.json"
@@ -131,6 +134,8 @@ def generate_html(events, updated_str):
   .btn-update {{ display: inline-block; margin-left: 12px; padding: 8px 16px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 0.9rem; }}
   .btn-update:hover {{ background: #1d4ed8; }}
   .update-note {{ font-size: 0.8rem; color: #64748b; margin: -8px 0 16px; }}
+  .btn-docx {{ display: inline-block; margin-left: 12px; padding: 8px 16px; background: #16a34a; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 0.9rem; }}
+  .btn-docx:hover {{ background: #15803d; }}
 </style>
 </head>
 <body>
@@ -138,8 +143,9 @@ def generate_html(events, updated_str):
   <h1>あいぽーと イベントコーナー・会議セミナー室 予定検索</h1>
   <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）
     <a class="btn-update" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
+    <a class="btn-docx" href="weekly.docx" download>📄 週報ダウンロード（Word）</a>
   </div>
-  <p class="update-note">※ボタンを押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
+  <p class="update-note">※「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。週報は次の月曜〜日曜の7日分（1日1ページ）です。</p>
 
   <div class="filters">
     <div class="filter-group">
@@ -356,6 +362,90 @@ def main():
     updated_str = now.strftime("%Y-%m-%d %H:%M")
     generate_html(all_events, updated_str)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
+    week_start = _next_monday(now)
+    generate_weekly_docx(all_events, week_start)
+    print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
+
+
+WEEKLY_DOCX_PATH = "weekly.docx"
+
+
+def _next_monday(now):
+    """次の月曜日の日付を返す（当日が月曜の場合は当日）"""
+    days_ahead = (7 - now.weekday()) % 7
+    return (now + datetime.timedelta(days=days_ahead)).date()
+
+
+def _set_jp_font(doc):
+    """文書全体の既定フォントを游ゴシックにする"""
+    style_el = doc.styles["Normal"].element
+    rpr = style_el.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        style_el.append(rpr)
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = OxmlElement("w:rFonts")
+        rpr.append(rfonts)
+    rfonts.set(qn("w:ascii"), "Yu Gothic")
+    rfonts.set(qn("w:hAnsi"), "Yu Gothic")
+    rfonts.set(qn("w:eastAsia"), "游ゴシック")
+    rfonts.set(qn("w:cs"), "Yu Gothic")
+
+
+def generate_weekly_docx(events, week_start):
+    """次の月曜〜日曜の7日分を1日1ページのWord文書（weekly.docx）に出力する"""
+    doc = Document()
+    _set_jp_font(doc)
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    fsp = "\u3000"
+
+    for offset in range(7):
+        day = week_start + datetime.timedelta(days=offset)
+        date_str = day.strftime("%Y-%m-%d")
+        wd = weekdays[day.weekday()]
+        day_events = [e for e in events if e.get("date") == date_str]
+        day_events.sort(key=lambda x: (_start_hour(x.get("time", "")), x.get("time", ""), x.get("id", "")))
+
+        p = doc.add_paragraph()
+        p.add_run(f"{day.month}月{day.day}日（{wd}）{fsp}")
+        mark = p.add_run("◎")
+        mark.bold = True
+        p.add_run("どなたでも参加できます")
+
+        table = doc.add_table(rows=2, cols=2)
+        table.style = "Table Grid"
+        table.rows[0].cells[0].text = "イベントコーナー"
+        table.rows[0].cells[1].text = "会議・セミナー室"
+
+        event_col, seminar_col = [], []
+        for e in day_events:
+            room = e.get("room", "")
+            has_event = "イベント" in room
+            has_seminar = "会議" in room
+            if has_event and has_seminar:
+                event_col.append(e)
+                seminar_col.append(e)
+            elif has_event:
+                event_col.append(e)
+            elif has_seminar:
+                seminar_col.append(e)
+            else:
+                seminar_col.append(e)
+
+        for col_events, cell in ((event_col, table.rows[1].cells[0]),
+                                 (seminar_col, table.rows[1].cells[1])):
+            for e in col_events:
+                cell.add_paragraph("◎" + e.get("time", ""))
+                cell.add_paragraph("・使用団体：" + e.get("org", ""))
+                cell.add_paragraph("・内" + fsp * 3 + "容：" + e.get("title", ""))
+                cell.add_paragraph("・参 加 費：" + e.get("fee", ""))
+                cell.add_paragraph("")
+
+        if offset < 6:
+            doc.add_page_break()
+
+    doc.save(WEEKLY_DOCX_PATH)
 
 
 if __name__ == "__main__":
