@@ -11,7 +11,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Mm
+from docx.shared import Mm, Pt
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 CACHE_PATH = "cache.json"
@@ -398,6 +398,7 @@ def _set_jp_font(doc):
     rfonts.set(qn("w:hAnsi"), "Meiryo UI")
     rfonts.set(qn("w:eastAsia"), JP_FONT)
     rfonts.set(qn("w:cs"), "Meiryo UI")
+    doc.styles["Normal"].font.size = Pt(12)
 
 
 def _shade_cell(cell, fill):
@@ -440,13 +441,16 @@ def generate_weekly_docx(events, week_start):
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         date_run = p.add_run(f"{day.month}月{day.day}日（{wd}）{fsp}◎どなたでも参加できます")
         date_run.bold = True
+        date_run.font.size = Pt(18)
 
         table = doc.add_table(rows=2, cols=2)
         table.style = "Table Grid"
         for hdr_text, hdr_cell in (("イベントコーナー", table.rows[0].cells[0]),
                                    ("会議・セミナー室", table.rows[0].cells[1])):
             hdr_cell.text = hdr_text
-            hdr_cell.paragraphs[0].runs[0].bold = True
+            hdr_run = hdr_cell.paragraphs[0].runs[0]
+            hdr_run.bold = True
+            hdr_run.font.size = Pt(14)
             _shade_cell(hdr_cell, "D9D9D9")
 
         event_col, seminar_col = [], []
