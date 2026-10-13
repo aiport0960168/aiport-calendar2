@@ -377,8 +377,8 @@ def _day_font_sizes(n_blocks):
     """1列あたりの件数に応じて文字サイズを決める（少ない日ほど大きく、1日1ページ厳守）"""
     if n_blocks <= 2:
         return (30, 22, 20)
-    if n_blocks <= 4:
-        return (24, 18, 16)
+    if n_blocks <= 3:
+        return (24, 18, 15)
     return (20, 16, 13)
 
 
