@@ -108,36 +108,40 @@ def fetch_detail_info(session, detail_url):
 def fetch_availability_day(session, target_date):
     """空き状況ページから1日分の予約済み時間帯を取得する。取れなければNone"""
     params = {"c_id": 4, "sely": target_date.year, "selm": target_date.month, "seld": target_date.day}
-    try:
-        res = session.get(AVAIL_URL, params=params, headers=HEADERS, timeout=20)
-        res.encoding = "utf-8"
-        soup = BeautifulSoup(res.text, "html.parser")
-        title_el = soup.find(id="mttl")
-        if title_el:
-            m = re.search(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", title_el.get_text())
-            if m:
-                shown = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                if shown != target_date:
-                    return None
-        status_div = soup.find("div", class_="reservationStatus")
-        if not status_div:
-            return None
-        result = {}
-        for title_div in status_div.find_all("div", class_="title"):
-            room_name = title_div.get_text(strip=True)
-            key = "イベントコーナー" if "イベント" in room_name else "会議セミナー室"
-            slots = []
-            body_text = title_div.find_next_sibling("div", class_="body_text")
-            if body_text:
-                for li in body_text.find_all("li"):
-                    mm = re.search(r"(\d{1,2}:\d{2})\s*～\s*(\d{1,2}:\d{2})", li.get_text())
-                    if mm:
-                        slots.append(mm.group(1) + "～" + mm.group(2))
-            result[key] = slots
-        return result if result else None
-    except Exception as e:
-        print(f"空き状況取得失敗 ({target_date}): {e}")
-        return None
+    for attempt in range(3):
+        try:
+            res = session.get(AVAIL_URL, params=params, headers=HEADERS, timeout=30)
+            res.encoding = "utf-8"
+            soup = BeautifulSoup(res.text, "html.parser")
+            title_el = soup.find(id="mttl")
+            if title_el:
+                m = re.search(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", title_el.get_text())
+                if m:
+                    shown = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    if shown != target_date:
+                        return None
+            status_div = soup.find("div", class_="reservationStatus")
+            if not status_div:
+                return None
+            result = {}
+            for title_div in status_div.find_all("div", class_="title"):
+                room_name = title_div.get_text(strip=True)
+                key = "イベントコーナー" if "イベント" in room_name else "会議セミナー室"
+                slots = []
+                body_text = title_div.find_next_sibling("div", class_="body_text")
+                if body_text:
+                    for li in body_text.find_all("li"):
+                        mm = re.search(r"(\d{1,2}:\d{2})\s*～\s*(\d{1,2}:\d{2})", li.get_text())
+                        if mm:
+                            slots.append(mm.group(1) + "～" + mm.group(2))
+                result[key] = slots
+            return result if result else None
+        except Exception as e:
+            if attempt == 2:
+                print(f"空き状況取得失敗 ({target_date}): {e}")
+                return None
+            time.sleep(2)
+    return None
 
 
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None):
@@ -160,9 +164,15 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   * {{ box-sizing: border-box; }}
   body {{ font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif; background: #eef2f7; color: #1e293b; margin: 0; padding: 20px 12px 40px; }}
   .container {{ max-width: 1200px; margin: 0 auto; }}
-  .app-header {{ background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; border-radius: 14px; padding: 22px 26px; box-shadow: 0 4px 14px rgba(30,58,138,0.25); }}
+  .app-header {{ background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; border-radius: 14px; padding: 22px 26px; box-shadow: 0 4px 14px rgba(30,58,138,0.25); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }}
   .app-header h1 {{ margin: 0 0 6px; font-size: 1.45rem; }}
   .updated {{ font-size: 0.85rem; opacity: 0.92; }}
+  .btn-update-sm {{ background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.65); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 0.82rem; font-weight: bold; text-decoration: none; white-space: nowrap; }}
+  .btn-update-sm:hover {{ background: rgba(255,255,255,0.3); }}
+  .filters-head {{ grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }}
+  .filters-head h2 {{ margin: 0; font-size: 1.05rem; color: #1e293b; }}
+  .btn-clear {{ padding: 7px 14px; border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; cursor: pointer; font-weight: bold; font-size: 0.85rem; color: #475569; }}
+  .btn-clear:hover {{ border-color: #dc2626; color: #dc2626; }}
   .actions {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0 12px; }}
   .action-card {{ display: block; background: #fff; border-radius: 12px; padding: 14px 16px; text-decoration: none; color: #1e293b; box-shadow: 0 2px 8px rgba(15,23,42,0.06); border-left: 6px solid #2563eb; font-weight: bold; }}
   .action-card span {{ display: block; margin-top: 4px; font-size: 0.8rem; font-weight: normal; color: #64748b; }}
@@ -233,25 +243,26 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .day-ev-time {{ font-weight: bold; color: #334155; margin-right: 8px; white-space: nowrap; }}
   .day-ev-org {{ color: #64748b; font-size: 0.82rem; }}
   .day-ev-none {{ color: #94a3b8; font-size: 0.9rem; }}
-  .avail-note {{ font-size: 0.78rem; color: #64748b; margin: 12px 0 0; }}
   @media (max-width: 640px) {{ .app-header {{ padding: 18px; }} .app-header h1 {{ font-size: 1.2rem; }} th, td {{ padding: 9px 8px; }} }}
 </style>
 </head>
 <body>
 <div class="container">
   <header class="app-header">
-    <h1>あいぽーと イベントコーナー・会議セミナー室 予定検索</h1>
-    <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）</div>
+    <div>
+      <h1>あいぽーと イベントコーナー・会議セミナー室 予定検索</h1>
+      <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）</div>
+    </div>
+    <a class="btn-update-sm" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
   </header>
 
   <div class="actions">
-    <a class="action-card" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新<span>GitHubのページで「Run workflow」を押すと再取得します</span></a>
     <a class="action-card docx" href="weekly.docx" download>📄 週報ダウンロード（Word）<span>対象: {week_label}分</span></a>
     <a class="action-card excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）<span>対象: {period_label}分</span></a>
   </div>
 
   <div class="info-box">
-    <p>※データは毎朝6時00分に自動更新されます。</p>
+    <p>※データは毎朝6時00分に自動更新されます。手動で更新する場合は右上の「最新情報に更新」から、GitHubのページで「Run workflow」を押してください。</p>
     <p>※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。</p>
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
   </div>
@@ -261,6 +272,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
       <h2>🗓 空き状況（日付で確認）</h2>
       <div class="avail-controls">
         <button type="button" class="avail-nav" id="availPrev">◀ 前日</button>
+        <button type="button" class="avail-nav" id="availToday">今日</button>
         <input type="date" id="availDate">
         <button type="button" class="avail-nav" id="availNext">翌日 ▶</button>
       </div>
@@ -284,10 +296,13 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
         <div id="dayEventsSeminar"></div>
       </div>
     </div>
-    <p class="avail-note">※利用可能時間は8:30～21:00です。予約状況は常に変動しますので、最新の状況はお電話（096-366-0168）でご確認ください。</p>
   </div>
 
   <div class="filters card">
+    <div class="filters-head">
+      <h2>🔍 行事を検索</h2>
+      <button type="button" class="btn-clear" id="clearFilters">条件をクリア</button>
+    </div>
     <div class="filter-group">
       <label>開始日</label>
       <input type="date" id="startDate">
@@ -475,7 +490,20 @@ document.getElementById('availDate').value = todayStr;
 document.getElementById('availDate').addEventListener('change', renderAvail);
 document.getElementById('availPrev').addEventListener('click', () => shiftAvailDate(-1));
 document.getElementById('availNext').addEventListener('click', () => shiftAvailDate(1));
+document.getElementById('availToday').addEventListener('click', () => {{ document.getElementById('availDate').value = todayStr; renderAvail(); }});
 renderAvail();
+
+function clearFilters() {{
+  document.getElementById('startDate').value = todayStr;
+  document.getElementById('endDate').value = '';
+  document.getElementById('keyword').value = '';
+  document.getElementById('hideCancel').checked = true;
+  document.getElementById('onlyCancel').checked = false;
+  currentTab = 'all';
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
+  render();
+}}
+document.getElementById('clearFilters').addEventListener('click', clearFilters);
 </script>
 </body>
 </html>"""
