@@ -161,7 +161,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   </div>
   <p class="update-note">※データは毎朝6時00分に自動更新されます。「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
   <p class="update-note">※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。今ダウンロードできるのは{week_label}分です。</p>
-  <p class="update-note">※あいぽーと通信用カレンダーは16日〜翌月15日分です。今ダウンロードできるのは{period_label}分です。</p>
+  <p class="update-note">※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。今ダウンロードできるのは{period_label}分です。</p>
 
   <div class="filters">
     <div class="filter-group">
@@ -492,11 +492,10 @@ def _fit_sizes(event_col, seminar_col):
 
 
 def _newsletter_period_start(now):
-    """あいぽーと通信の対象期間（16日〜翌月15日）の開始日を返す"""
-    if now.day >= 16:
-        y, m = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
-    else:
-        y, m = now.year, now.month
+    """あいぽーと通信の対象期間の開始日。基本は当月16日、毎月15日17時以降は翌月16日に切り替える。"""
+    y, m = now.year, now.month
+    if now.day > 15 or (now.day == 15 and now.hour >= 17):
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return datetime.date(y, m, 16)
 
 
