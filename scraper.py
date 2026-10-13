@@ -431,13 +431,34 @@ def main():
 WEEKLY_DOCX_PATH = "weekly.docx"
 
 
-def _day_font_sizes(n_blocks):
-    """1列あたりの件数に応じて文字サイズを決める（少ない日ほど大きく、1日1ページ厳守）"""
-    if n_blocks <= 2:
-        return (30, 22, 20)
-    if n_blocks <= 3:
-        return (24, 18, 15)
-    return (18, 14, 12)
+def _fit_sizes(event_col, seminar_col):
+    """1ページに収まる範囲で最大の文字サイズ（日付, 見出し, 本文）を決める"""
+    factor = 1.75  # Wordの行間係数（実測ベース）
+    usable = 182.0  # 1ページに使える高さ(mm)
+
+    def col_lines(events, body):
+        lines = 0
+        for e in events:
+            lines += 1
+            lines += len(_balanced_lines(e.get("org", ""), body))
+            lines += len(_balanced_lines(e.get("title", ""), body))
+            lines += 1
+        return lines
+
+    def total_height(body):
+        date_pt = round(body * 1.5)
+        head_pt = round(body * 1.15)
+        date_lines = 1 if 23 * date_pt * 0.3528 <= 283 else 2
+        h = date_lines * date_pt * factor * 0.3528
+        h += head_pt * factor * 0.3528
+        h += max(col_lines(event_col, body),
+                 col_lines(seminar_col, body)) * body * factor * 0.3528
+        return h
+
+    body = 24.0
+    while body > 9.5 and total_height(body) > usable:
+        body -= 0.5
+    return (round(body * 1.5), round(body * 1.15), body)
 
 
 def _report_monday(now):
@@ -527,7 +548,7 @@ def generate_weekly_docx(events, week_start):
             else:
                 seminar_col.append(e)
 
-        date_size, head_size, body_size = _day_font_sizes(max(len(event_col), len(seminar_col)))
+        date_size, head_size, body_size = _fit_sizes(event_col, seminar_col)
 
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -547,8 +568,13 @@ def generate_weekly_docx(events, week_start):
 
         for col_events, cell in ((event_col, table.rows[1].cells[0]),
                                  (seminar_col, table.rows[1].cells[1])):
+            use_first = True
             for e in col_events:
-                time_p = cell.add_paragraph()
+                if use_first:
+                    time_p = cell.paragraphs[0]
+                    use_first = False
+                else:
+                    time_p = cell.add_paragraph()
                 time_run = time_p.add_run("◎" + e.get("time", ""))
                 time_run.bold = True
                 time_run.font.size = Pt(body_size)
