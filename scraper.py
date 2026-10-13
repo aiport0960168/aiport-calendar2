@@ -13,6 +13,8 @@ from docx.oxml.ns import qn
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Mm, Pt
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 CACHE_PATH = "cache.json"
@@ -102,12 +104,14 @@ def fetch_detail_info(session, detail_url):
         return {"time": "", "room": "その他・未記載", "place": "", "org": "", "fee": ""}
 
 
-def generate_html(events, updated_str, week_start, week_end):
+def generate_html(events, updated_str, week_start, week_end, period_start, period_end):
     events_json = json.dumps(events, ensure_ascii=False)
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
     wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
     week_label = (f"{week_start.month}月{week_start.day}日（{wd_jp[week_start.weekday()]}）"
                   f"〜{week_end.month}月{week_end.day}日（{wd_jp[week_end.weekday()]}）")
+    period_label = (f"{period_start.month}月{period_start.day}日（{wd_jp[period_start.weekday()]}）"
+                    f"〜{period_end.month}月{period_end.day}日（{wd_jp[period_end.weekday()]}）")
     html = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -143,6 +147,8 @@ def generate_html(events, updated_str, week_start, week_end):
   .update-note {{ font-size: 0.8rem; color: #64748b; margin: -8px 0 16px; }}
   .btn-docx {{ display: inline-block; margin-left: 12px; padding: 8px 16px; background: #16a34a; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 0.9rem; }}
   .btn-docx:hover {{ background: #15803d; }}
+  .btn-excel {{ display: inline-block; margin-left: 12px; padding: 8px 16px; background: #217346; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 0.9rem; }}
+  .btn-excel:hover {{ background: #1a5c38; }}
 </style>
 </head>
 <body>
@@ -151,9 +157,11 @@ def generate_html(events, updated_str, week_start, week_end):
   <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）
     <a class="btn-update" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
     <a class="btn-docx" href="weekly.docx" download>📄 週報ダウンロード（Word）</a>
+    <a class="btn-excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）</a>
   </div>
   <p class="update-note">※データは毎朝6時00分に自動更新されます。「最新情報に更新」を押すとGitHubのページが開きます。「Run workflow」を押すと数分で最新のデータに更新されます。</p>
   <p class="update-note">※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。今ダウンロードできるのは{week_label}分です。</p>
+  <p class="update-note">※あいぽーと通信用カレンダーは16日〜翌月15日分です。今ダウンロードできるのは{period_label}分です。</p>
 
   <div class="filters">
     <div class="filter-group">
@@ -427,13 +435,18 @@ def main():
     updated_str = now.strftime("%Y-%m-%d %H:%M")
     week_start = _report_monday(now)
     week_end = week_start + datetime.timedelta(days=6)
-    generate_html(all_events, updated_str, week_start, week_end)
+    period_start = _newsletter_period_start(now)
+    period_end = _period_end(period_start)
+    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
     generate_weekly_docx(all_events, week_start)
     print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
+    n_news = generate_newsletter_excel(all_events, period_start)
+    print(f"あいぽーと通信用: {period_start}〜{period_end}の{n_news}件を newsletter.xlsx に出力しました。")
 
 
 WEEKLY_DOCX_PATH = "weekly.docx"
+NEWSLETTER_XLSX_PATH = "newsletter.xlsx"
 
 
 def _fit_sizes(event_col, seminar_col):
@@ -476,6 +489,37 @@ def _fit_sizes(event_col, seminar_col):
     if no_split >= 15:
         body = min(body, no_split)
     return (date_pt, head_pt, body)
+
+
+def _newsletter_period_start(now):
+    """あいぽーと通信の対象期間（16日〜翌月15日）の開始日を返す"""
+    if now.day >= 16:
+        y, m = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    else:
+        y, m = now.year, now.month
+    return datetime.date(y, m, 16)
+
+
+def _period_end(start):
+    y, m = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+    return datetime.date(y, m, 16) - datetime.timedelta(days=1)
+
+
+def _to_hhmm(time_str):
+    s = (time_str or "").replace(" ", "").replace("　", "")
+    s = re.sub(r"(\d+)時(\d+)分", lambda m: f"{int(m.group(1))}:{m.group(2)}", s)
+    s = re.sub(r"(\d+)時", lambda m: f"{int(m.group(1))}:00", s)
+    return s
+
+
+def _place_marker(room):
+    if room == "イベントコーナー":
+        return "イ"
+    if room == "会議セミナー室":
+        return "会"
+    if room == "イベントコーナー・会議セミナー室":
+        return "イ・会"
+    return ""
 
 
 def _report_monday(now):
@@ -609,6 +653,99 @@ def generate_weekly_docx(events, week_start):
             doc.add_page_break()
 
     doc.save(WEEKLY_DOCX_PATH)
+
+
+def generate_newsletter_excel(events, period_start):
+    """あいぽーと通信用カレンダー（16日〜翌月15日）をExcelで出力する"""
+    period_end = _period_end(period_start)
+    wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
+    group_order = {"イ": 0, "イ・会": 1, "会": 2, "": 3}
+
+    picked = []
+    for e in events:
+        if "中止" in e.get("title", ""):
+            continue
+        d = datetime.date.fromisoformat(e["date"])
+        if not (period_start <= d <= period_end):
+            continue
+        marker = _place_marker(e.get("room", ""))
+        picked.append((d, group_order[marker], _start_hour(e.get("time", "")),
+                       e.get("time", ""), e, marker))
+    picked.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "あいぽーとカレンダー"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+
+    thin = Side(style="thin", color="666666")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.merge_cells("A1:E1")
+    c = ws["A1"]
+    c.value = f"あいぽーとカレンダー {period_start.month}月（後半）～{period_end.month}月（前半）"
+    c.font = Font(name="Meiryo UI", size=14, bold=True)
+
+    ws.merge_cells("A2:E2")
+    c = ws["A2"]
+    c.value = ("※受付分までの予定を記載しています。団体の判断で中止となる場合もありますので、"
+               "事前に主催団体へ確認のうえ参加ください。「あいぽーとカレンダー」は、"
+               "あいぽーとホームページにも掲載しています。掲載している内容は、一般の方も参加できます。"
+               "主催団体のルールに則って参加ください。")
+    c.font = Font(name="Meiryo UI", size=9)
+    c.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[2].height = 30
+
+    ws.merge_cells("A3:E3")
+    c = ws["A3"]
+    c.value = "場所：イ：イベントコーナー　会：会議・セミナー室"
+    c.font = Font(name="Meiryo UI", size=10)
+
+    fill = PatternFill("solid", fgColor="D9D9D9")
+    for col, h in enumerate(["期日", "時間", "主催", "内容", "場所"], start=1):
+        c = ws.cell(row=4, column=col, value=h)
+        c.font = Font(name="Meiryo UI", size=11, bold=True)
+        c.fill = fill
+        c.border = border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    for i, w in enumerate([14, 15, 34, 52, 8], start=1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    r = 5
+    spans = []
+    cur_date = None
+    span_start = None
+    for d, _g, _h, _t, e, marker in picked:
+        if d != cur_date:
+            if cur_date is not None:
+                spans.append((span_start, r - 1))
+            cur_date = d
+            span_start = r
+            c = ws.cell(row=r, column=1, value=f"{d.month}月{d.day}日（{wd_jp[d.weekday()]}）")
+            c.alignment = Alignment(vertical="top")
+        for col, v in ((2, _to_hhmm(e.get("time", ""))), (3, e.get("org", "")),
+                       (4, e.get("title", "")), (5, marker)):
+            c = ws.cell(row=r, column=col, value=v)
+            c.alignment = Alignment(wrap_text=(col in (3, 4)), vertical="top",
+                                    horizontal="center" if col == 5 else "left")
+        for col in range(1, 6):
+            cell = ws.cell(row=r, column=col)
+            cell.border = border
+            cell.font = Font(name="Meiryo UI", size=11)
+        r += 1
+    if cur_date is not None:
+        spans.append((span_start, r - 1))
+    for s, e_row in spans:
+        if e_row > s:
+            ws.merge_cells(start_row=s, start_column=1, end_row=e_row, end_column=1)
+
+    wb.save(NEWSLETTER_XLSX_PATH)
+    return len(picked)
 
 
 if __name__ == "__main__":
