@@ -284,7 +284,7 @@ def _disp_width(text):
 
 def _balanced_lines(text, body_size):
     """長い文字列を行末に孤立文字が出ないようバランスよく分ける"""
-    cap = max(10, int(138 / (body_size * 0.3528)) - 1)
+    cap = max(8, int(139 / (body_size * 0.3528)) - 7)
     if _disp_width(text) <= cap:
         return [text]
     no_head = set("」』）)］｝、。．，．・：；？！…―〉》々")
@@ -432,9 +432,11 @@ WEEKLY_DOCX_PATH = "weekly.docx"
 
 
 def _fit_sizes(event_col, seminar_col):
-    """1ページに収まる範囲で最大の文字サイズ（日付, 見出し, 本文）を決める"""
-    factor = 1.75  # Wordの行間係数（実測ベース）
+    """日付・見出しは固定サイズ。本文を1ページに収まる最大にする"""
+    factor = 1.40  # 行間の実効係数（Wordの行間倍率0.78適用後の実測ベース）
     usable = 182.0  # 1ページに使える高さ(mm)
+    date_pt = 24
+    head_pt = 18
 
     def col_lines(events, body):
         lines = 0
@@ -446,19 +448,16 @@ def _fit_sizes(event_col, seminar_col):
         return lines
 
     def total_height(body):
-        date_pt = round(body * 1.5)
-        head_pt = round(body * 1.15)
-        date_lines = 1 if 23 * date_pt * 0.3528 <= 283 else 2
-        h = date_lines * date_pt * factor * 0.3528
+        h = date_pt * factor * 0.3528
         h += head_pt * factor * 0.3528
         h += max(col_lines(event_col, body),
                  col_lines(seminar_col, body)) * body * factor * 0.3528
         return h
 
-    body = 24.0
+    body = 30.0
     while body > 9.5 and total_height(body) > usable:
         body -= 0.5
-    return (round(body * 1.5), round(body * 1.15), body)
+    return (date_pt, head_pt, body)
 
 
 def _report_monday(now):
@@ -493,7 +492,7 @@ def _set_jp_font(doc):
     pf = doc.styles["Normal"].paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(0)
-    pf.line_spacing = 1.0
+    pf.line_spacing = 0.78
 
 
 def _shade_cell(cell, fill):
