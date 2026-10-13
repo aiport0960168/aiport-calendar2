@@ -17,6 +17,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
+AVAIL_URL = "https://www.kumamoto-aiport.com/reservation_sts/pub/default.aspx"
 CACHE_PATH = "cache.json"
 HTML_PATH = "index.html"
 
@@ -104,8 +105,44 @@ def fetch_detail_info(session, detail_url):
         return {"time": "", "room": "その他・未記載", "place": "", "org": "", "fee": ""}
 
 
-def generate_html(events, updated_str, week_start, week_end, period_start, period_end):
+def fetch_availability_day(session, target_date):
+    """空き状況ページから1日分の予約済み時間帯を取得する。取れなければNone"""
+    params = {"c_id": 4, "sely": target_date.year, "selm": target_date.month, "seld": target_date.day}
+    try:
+        res = session.get(AVAIL_URL, params=params, headers=HEADERS, timeout=20)
+        res.encoding = "utf-8"
+        soup = BeautifulSoup(res.text, "html.parser")
+        title_el = soup.find(id="mttl")
+        if title_el:
+            m = re.search(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", title_el.get_text())
+            if m:
+                shown = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                if shown != target_date:
+                    return None
+        status_div = soup.find("div", class_="reservationStatus")
+        if not status_div:
+            return None
+        result = {}
+        for title_div in status_div.find_all("div", class_="title"):
+            room_name = title_div.get_text(strip=True)
+            key = "イベントコーナー" if "イベント" in room_name else "会議セミナー室"
+            slots = []
+            body_text = title_div.find_next_sibling("div", class_="body_text")
+            if body_text:
+                for li in body_text.find_all("li"):
+                    mm = re.search(r"(\d{1,2}:\d{2})\s*～\s*(\d{1,2}:\d{2})", li.get_text())
+                    if mm:
+                        slots.append(mm.group(1) + "～" + mm.group(2))
+            result[key] = slots
+        return result if result else None
+    except Exception as e:
+        print(f"空き状況取得失敗 ({target_date}): {e}")
+        return None
+
+
+def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None):
     events_json = json.dumps(events, ensure_ascii=False)
+    availability_json = json.dumps(availability or {}, ensure_ascii=False)
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
     only_label = "「" + LB + "中止" + RB + "」だけを表示"
     wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
@@ -168,6 +205,35 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   a.btn-link {{ display: inline-block; padding: 5px 12px; background: #fff; border: 1px solid #2563eb; color: #2563eb; text-decoration: none; border-radius: 999px; font-size: 0.82rem; font-weight: bold; white-space: nowrap; }}
   a.btn-link:hover {{ background: #2563eb; color: #fff; }}
   .empty {{ text-align: center; color: #94a3b8; padding: 36px 12px; font-size: 1rem; }}
+  .avail-card {{ padding: 18px; margin-bottom: 16px; }}
+  .avail-head {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
+  .avail-head h2 {{ margin: 0; font-size: 1.15rem; color: #1e293b; }}
+  .avail-controls {{ display: flex; align-items: center; gap: 8px; }}
+  .avail-controls input[type="date"] {{ padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; }}
+  .avail-nav {{ padding: 8px 12px; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; cursor: pointer; font-weight: bold; color: #475569; }}
+  .avail-nav:hover {{ border-color: #2563eb; color: #2563eb; }}
+  .avail-date-label {{ font-size: 1.05rem; font-weight: bold; margin: 12px 0 8px; color: #1e293b; }}
+  .avail-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }}
+  .room-panel {{ border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }}
+  .room-panel h3 {{ margin: 0 0 10px; }}
+  .room-panel h4 {{ margin: 14px 0 4px; font-size: 0.9rem; color: #475569; }}
+  .timeline {{ display: flex; height: 20px; border-radius: 6px; overflow: hidden; border: 1px solid #cbd5e1; background: #dcfce7; }}
+  .seg-booked {{ background: #f87171; height: 100%; }}
+  .tl-scale {{ position: relative; height: 16px; font-size: 0.7rem; color: #94a3b8; margin-top: 2px; }}
+  .tl-scale span {{ position: absolute; transform: translateX(-50%); }}
+  .tl-scale span:first-child {{ transform: none; }}
+  .tl-scale span:last-child {{ transform: none; }}
+  .slot-list {{ margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }}
+  .slot {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.82rem; font-weight: bold; }}
+  .slot.booked {{ background: #fee2e2; color: #b91c1c; }}
+  .slot.free {{ background: #dcfce7; color: #15803d; }}
+  .slot.nodata {{ background: #f1f5f9; color: #64748b; }}
+  .day-ev {{ padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 0.9rem; }}
+  .day-ev:last-child {{ border-bottom: none; }}
+  .day-ev-time {{ font-weight: bold; color: #334155; margin-right: 8px; white-space: nowrap; }}
+  .day-ev-org {{ color: #64748b; font-size: 0.82rem; }}
+  .day-ev-none {{ color: #94a3b8; font-size: 0.9rem; }}
+  .avail-note {{ font-size: 0.78rem; color: #64748b; margin: 12px 0 0; }}
   @media (max-width: 640px) {{ .app-header {{ padding: 18px; }} .app-header h1 {{ font-size: 1.2rem; }} th, td {{ padding: 9px 8px; }} }}
 </style>
 </head>
@@ -188,6 +254,37 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <p>※データは毎朝6時00分に自動更新されます。</p>
     <p>※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。</p>
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
+  </div>
+
+  <div class="card avail-card">
+    <div class="avail-head">
+      <h2>🗓 空き状況（日付で確認）</h2>
+      <div class="avail-controls">
+        <button type="button" class="avail-nav" id="availPrev">◀ 前日</button>
+        <input type="date" id="availDate">
+        <button type="button" class="avail-nav" id="availNext">翌日 ▶</button>
+      </div>
+    </div>
+    <div class="avail-date-label" id="availDateLabel"></div>
+    <div class="avail-grid">
+      <div class="room-panel">
+        <h3><span class="badge badge-event">イベントコーナー</span></h3>
+        <div class="timeline" id="tlEvent"></div>
+        <div class="tl-scale"><span style="left:0%">8:30</span><span style="left:28%">12:00</span><span style="left:52%">15:00</span><span style="left:76%">18:00</span><span style="right:0">21:00</span></div>
+        <div class="slot-list" id="slotsEvent"></div>
+        <h4>この日の行事</h4>
+        <div id="dayEventsEvent"></div>
+      </div>
+      <div class="room-panel">
+        <h3><span class="badge badge-seminar">会議・セミナー室</span></h3>
+        <div class="timeline" id="tlSeminar"></div>
+        <div class="tl-scale"><span style="left:0%">8:30</span><span style="left:28%">12:00</span><span style="left:52%">15:00</span><span style="left:76%">18:00</span><span style="right:0">21:00</span></div>
+        <div class="slot-list" id="slotsSeminar"></div>
+        <h4>この日の行事</h4>
+        <div id="dayEventsSeminar"></div>
+      </div>
+    </div>
+    <p class="avail-note">※利用可能時間は8:30～21:00です。予約状況は常に変動しますので、最新の状況はお電話（096-366-0168）でご確認ください。</p>
   </div>
 
   <div class="filters card">
@@ -228,7 +325,6 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
           <th>場所区分</th>
           <th>タイトル</th>
           <th>団体名</th>
-          <th>場所詳細</th>
           <th>詳細</th>
         </tr>
       </thead>
@@ -300,11 +396,10 @@ function render() {{
       + '<td><span class="badge ' + getBadgeClass(ev.room) + '">' + ev.room + '</span></td>'
       + '<td class="title-cell">' + ev.title + '</td>'
       + '<td class="org-cell">' + ev.org + '</td>'
-      + '<td>' + ev.place + '</td>'
       + '<td><a class="btn-link" href="' + ev.url + '" target="_blank" rel="noopener">公式詳細</a></td>'
       + '</tr>';
   }}
-  if (!rows) rows = '<tr><td colspan="7" class="empty">該当する予定がありません</td></tr>';
+  if (!rows) rows = '<tr><td colspan="6" class="empty">該当する予定がありません</td></tr>';
   tbody.innerHTML = rows;
 }}
 
@@ -314,6 +409,73 @@ document.querySelectorAll('#startDate, #endDate, #keyword, #hideCancel, #onlyCan
 }});
 
 render();
+
+const availability = {availability_json};
+const AVAIL_START = 510;
+const AVAIL_END = 1260;
+
+function toMin(hhmm) {{
+  const p = hhmm.split(':');
+  return parseInt(p[0]) * 60 + parseInt(p[1]);
+}}
+
+function shiftAvailDate(delta) {{
+  const inp = document.getElementById('availDate');
+  if (!inp.value) return;
+  const d = new Date(inp.value + 'T00:00:00');
+  d.setDate(d.getDate() + delta);
+  inp.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  renderAvail();
+}}
+
+function renderRoom(suffix, roomKey, dateStr) {{
+  const tl = document.getElementById('tl' + suffix);
+  const slotsEl = document.getElementById('slots' + suffix);
+  const evEl = document.getElementById('dayEvents' + suffix);
+  const day = availability[dateStr];
+  if (!day) {{
+    tl.innerHTML = '';
+    slotsEl.innerHTML = '<span class="slot nodata">空き状況データがありません</span>';
+  }} else {{
+    const slots = day[roomKey] || [];
+    let pos = AVAIL_START;
+    let segs = '';
+    for (const s of slots) {{
+      const ab = s.split('～');
+      const st = Math.max(toMin(ab[0]), AVAIL_START);
+      const en = Math.min(toMin(ab[1]), AVAIL_END);
+      if (en <= st) continue;
+      if (st > pos) segs += '<div style="width:' + ((st - pos) / (AVAIL_END - AVAIL_START) * 100) + '%"></div>';
+      segs += '<div class="seg-booked" title="予約済 ' + s + '" style="width:' + ((en - st) / (AVAIL_END - AVAIL_START) * 100) + '%"></div>';
+      pos = en;
+    }}
+    tl.innerHTML = segs;
+    slotsEl.innerHTML = slots.length
+      ? slots.map(s => '<span class="slot booked">予約済 ' + s + '</span>').join('')
+      : '<span class="slot free">予約はありません（全日空き）</span>';
+  }}
+  const matchKey = roomKey === 'イベントコーナー' ? 'イベント' : '会議';
+  const evs = events.filter(ev => ev.date === dateStr && ev.room.includes(matchKey));
+  evEl.innerHTML = evs.length
+    ? evs.map(ev => '<div class="day-ev"><span class="day-ev-time">' + ev.time + '</span>' + ev.title + ' <span class="day-ev-org">' + ev.org + '</span></div>').join('')
+    : '<div class="day-ev-none">行事の登録はありません</div>';
+}}
+
+function renderAvail() {{
+  const dateStr = document.getElementById('availDate').value;
+  if (!dateStr) return;
+  const d = new Date(dateStr + 'T00:00:00');
+  const wd = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+  document.getElementById('availDateLabel').textContent = (d.getMonth() + 1) + '月' + d.getDate() + '日（' + wd + '）の空き状況と行事';
+  renderRoom('Event', 'イベントコーナー', dateStr);
+  renderRoom('Seminar', '会議セミナー室', dateStr);
+}}
+
+document.getElementById('availDate').value = todayStr;
+document.getElementById('availDate').addEventListener('change', renderAvail);
+document.getElementById('availPrev').addEventListener('click', () => shiftAvailDate(-1));
+document.getElementById('availNext').addEventListener('click', () => shiftAvailDate(1));
+renderAvail();
 </script>
 </body>
 </html>"""
@@ -471,12 +633,24 @@ def main():
     with open(CACHE_PATH, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
+    availability = {}
+    if all_events:
+        last_date = max(datetime.date.fromisoformat(e["date"]) for e in all_events)
+        day = now.date()
+        while day <= last_date:
+            day_avail = fetch_availability_day(session, day)
+            if day_avail is not None:
+                availability[day.strftime("%Y-%m-%d")] = day_avail
+            time.sleep(0.25)
+            day += datetime.timedelta(days=1)
+    print(f"空き状況: {len(availability)}日分を取得しました。")
+
     updated_str = now.strftime("%Y-%m-%d %H:%M")
     week_start = _report_monday(now)
     week_end = week_start + datetime.timedelta(days=6)
     period_start = _newsletter_period_start(now)
     period_end = _period_end(period_start)
-    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end)
+    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end, availability)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
     generate_weekly_docx(all_events, week_start)
     print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
