@@ -14,13 +14,15 @@ from docx.oxml.ns import qn
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Mm, Pt, RGBColor
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from html import escape as html_escape
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 AVAIL_URL = "https://www.kumamoto-aiport.com/reservation_sts/pub/default.aspx"
 CACHE_PATH = "cache.json"
 HTML_PATH = "index.html"
+VOLUNTEER_XLSX_PATH = "volunteer.xlsx"
 
 # sumitsuki-kakko (U+3010 / U+3011) built via chr() to keep this file ASCII-safe
 LB = chr(0x3010)
@@ -145,7 +147,207 @@ def fetch_availability_day(session, target_date):
     return None
 
 
-def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
+VOLUNTEER_HEADERS = ["掲載", "タイトル", "内容", "開催日", "開始時刻", "終了時刻", "場所", "募集人員", "募集締切", "駐車場", "実費支給", "託児", "公共交通機関", "お問合せ先"]
+
+
+def _vol_text(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v).strip()
+
+
+def _parse_vol_date(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime.datetime):
+        return v.date()
+    if isinstance(v, datetime.date):
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    s = s.replace("年", "/").replace("月", "/").replace("日", "")
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def _fmt_vol_time(v):
+    if v is None:
+        return ""
+    if isinstance(v, (datetime.time, datetime.datetime)):
+        return f"{v.hour}:{v.minute:02d}"
+    s = str(v).strip()
+    m = re.match(r"(\d{1,2})[:時](\d{1,2})?", s)
+    if m:
+        return f"{int(m.group(1))}:{int(m.group(2) or 0):02d}"
+    return s
+
+
+def _fmt_vol_date(d):
+    if d is None:
+        return ""
+    wd = ["月", "火", "水", "木", "金", "土", "日"][d.weekday()]
+    return f"{d.year}年{d.month}月{d.day}日（{wd}）"
+
+
+def load_volunteers(today):
+    if not os.path.exists(VOLUNTEER_XLSX_PATH):
+        print("volunteer.xlsx がないため、ボランティア情報は掲載しません。")
+        return []
+    try:
+        wb = load_workbook(VOLUNTEER_XLSX_PATH, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        print(f"volunteer.xlsx の読み込み失敗: {e}")
+        return []
+    if not rows:
+        return []
+    headers = [(_vol_text(c) if c is not None else "") for c in rows[0]]
+    idx = {}
+    for name in VOLUNTEER_HEADERS:
+        idx[name] = headers.index(name) if name in headers else -1
+
+    def cell(row, name):
+        i = idx.get(name, -1)
+        if i < 0 or i >= len(row):
+            return ""
+        return _vol_text(row[i])
+
+    def cell_raw(row, name):
+        i = idx.get(name, -1)
+        if i < 0 or i >= len(row):
+            return None
+        return row[i]
+
+    items = []
+    for row in rows[1:]:
+        if row is None:
+            continue
+        title = cell(row, "タイトル")
+        if not title:
+            continue
+        flag = cell(row, "掲載")
+        if flag in ("×", "x", "X", "しない", "非表示", "0"):
+            continue
+        event_date = _parse_vol_date(cell_raw(row, "開催日"))
+        deadline = _parse_vol_date(cell_raw(row, "募集締切"))
+        if deadline is not None and deadline < today:
+            continue
+        if event_date is not None and event_date < today:
+            continue
+        start_t = _fmt_vol_time(cell_raw(row, "開始時刻"))
+        end_t = _fmt_vol_time(cell_raw(row, "終了時刻"))
+        time_range = ""
+        if start_t and end_t:
+            time_range = f"{start_t}～{end_t}"
+        elif start_t:
+            time_range = f"{start_t}～"
+        elif end_t:
+            time_range = f"～{end_t}"
+        items.append({
+            "title": title,
+            "content": cell(row, "内容"),
+            "date": event_date,
+            "date_label": _fmt_vol_date(event_date),
+            "time": time_range,
+            "place": cell(row, "場所"),
+            "capacity": cell(row, "募集人員"),
+            "deadline": deadline,
+            "deadline_label": _fmt_vol_date(deadline),
+            "parking": cell(row, "駐車場"),
+            "expense": cell(row, "実費支給"),
+            "childcare": cell(row, "託児"),
+            "transport": cell(row, "公共交通機関"),
+            "contact": cell(row, "お問合せ先"),
+        })
+    items.sort(key=lambda x: (x["date"] is None, x["date"] or datetime.date.max, x["deadline"] or datetime.date.max))
+    return items
+
+
+def _vol_hp_text(v):
+    lines = [v["title"]]
+    if v["date_label"] or v["time"]:
+        dt = v["date_label"] + (f" {v['time']}" if v["time"] else "")
+        lines.append(LB + "日時" + RB + dt.strip())
+    if v["place"]:
+        lines.append(LB + "場所" + RB + v["place"])
+    if v["content"]:
+        lines.append(LB + "内容" + RB + v["content"])
+    if v["capacity"]:
+        lines.append(LB + "募集人員" + RB + v["capacity"])
+    if v["deadline_label"]:
+        lines.append(LB + "募集締切" + RB + v["deadline_label"])
+    others = []
+    if v["parking"]:
+        others.append("駐車場：" + v["parking"])
+    if v["expense"]:
+        others.append("実費支給：" + v["expense"])
+    if v["childcare"]:
+        others.append("託児：" + v["childcare"])
+    if others:
+        lines.append(LB + "その他" + RB + "／".join(others))
+    if v["transport"]:
+        lines.append(LB + "公共交通機関" + RB + v["transport"])
+    if v["contact"]:
+        lines.append(LB + "お問合せ先" + RB + v["contact"])
+    return "\n".join(lines)
+
+
+def _render_volunteer_section(volunteers):
+    parts = []
+    parts.append('<div class="card vol-card">')
+    parts.append('<h2>🤝 ボランティア募集情報</h2>')
+    parts.append('<p class="vol-note">※ボランティア・イベント情報提供書（太線枠の項目）をもとに掲載しています。募集締切を過ぎた情報は自動で非表示になります。</p>')
+    if not volunteers:
+        parts.append('<p class="empty">現在募集中のボランティア情報はありません</p>')
+    for v in volunteers:
+        rows = []
+        if v["date_label"] or v["time"]:
+            dt = v["date_label"] + (f" {v['time']}" if v["time"] else "")
+            rows.append(("日時", dt.strip()))
+        if v["place"]:
+            rows.append(("場所", v["place"]))
+        if v["content"]:
+            rows.append(("内容", v["content"]))
+        if v["capacity"]:
+            rows.append(("募集人員", v["capacity"]))
+        if v["deadline_label"]:
+            rows.append(("募集締切", v["deadline_label"]))
+        others = []
+        if v["parking"]:
+            others.append("駐車場：" + v["parking"])
+        if v["expense"]:
+            others.append("実費支給：" + v["expense"])
+        if v["childcare"]:
+            others.append("託児：" + v["childcare"])
+        if others:
+            rows.append(("その他", "／".join(others)))
+        if v["transport"]:
+            rows.append(("公共交通機関", v["transport"]))
+        if v["contact"]:
+            rows.append(("お問合せ先", v["contact"]))
+        trs = "".join(f'<tr><th>{html_escape(k)}</th><td>{html_escape(val)}</td></tr>' for k, val in rows)
+        hp_text = html_escape(_vol_hp_text(v))
+        parts.append('<div class="vol-item">')
+        parts.append(f'<div class="vol-title">{html_escape(v["title"])}</div>')
+        parts.append(f'<table class="vol-table">{trs}</table>')
+        parts.append('<details><summary>公式HP用テキスト（コピー用）</summary>')
+        parts.append(f'<textarea readonly rows="9">{hp_text}</textarea>')
+        parts.append('<button type="button" class="btn-copy" onclick="copyVolText(this)">テキストをコピー</button>')
+        parts.append('</details></div>')
+    parts.append('<script>function copyVolText(btn){var ta=btn.parentElement.querySelector("textarea");ta.select();try{navigator.clipboard.writeText(ta.value);}catch(e){document.execCommand("copy");}btn.textContent="コピーしました";setTimeout(function(){btn.textContent="テキストをコピー";},1500);}</script>')
+    parts.append('</div>')
+    return "\n".join(parts)
+
+
+def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None, volunteers=None):
     events_json = json.dumps(events, ensure_ascii=False)
     availability_json = json.dumps(availability or {}, ensure_ascii=False)
     radio_label = ""
@@ -159,6 +361,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                       f'📻 ラジオ原稿ダウンロード（Word）<span>対象: {radio_label}放送分</span></a>')
         radio_note = (f'<p>※ラジオ原稿は月曜放送分です。毎週水曜17時に翌週分へ切り替わります。'
                       f'今ダウンロードできるのは{radio_label}放送分です。</p>')
+    volunteer_section = _render_volunteer_section(volunteers or [])
     cancel_label = "「" + LB + "中止" + RB + "」の予定を隠す"
     only_label = "「" + LB + "中止" + RB + "」だけを表示"
     wd_jp = ["月", "火", "水", "木", "金", "土", "日"]
@@ -230,6 +433,19 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   a.btn-link:hover {{ background: #2563eb; color: #fff; }}
   .empty {{ text-align: center; color: #94a3b8; padding: 36px 12px; font-size: 1rem; }}
   .avail-card {{ padding: 18px; margin-bottom: 16px; }}
+  .vol-card {{ padding: 18px; margin-bottom: 16px; }}
+  .vol-card h2 {{ margin: 0 0 6px; font-size: 1.15rem; color: #1e293b; }}
+  .vol-note {{ font-size: 0.8rem; color: #64748b; margin: 0 0 12px; }}
+  .vol-item {{ border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }}
+  .vol-title {{ font-size: 1.05rem; font-weight: bold; color: #0f172a; margin-bottom: 8px; }}
+  .vol-table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; box-shadow: none; }}
+  .vol-table th {{ width: 110px; background: #f8fafc; color: #475569; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }}
+  .vol-table td {{ padding: 6px 10px; border-bottom: 1px solid #e2e8f0; white-space: pre-wrap; }}
+  .vol-item details {{ margin-top: 10px; }}
+  .vol-item summary {{ cursor: pointer; font-size: 0.85rem; color: #2563eb; font-weight: bold; }}
+  .vol-item textarea {{ width: 100%; margin-top: 8px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem; font-family: inherit; background: #f8fafc; }}
+  .btn-copy {{ margin-top: 6px; padding: 6px 14px; border: 1px solid #2563eb; background: #fff; color: #2563eb; border-radius: 999px; cursor: pointer; font-weight: bold; font-size: 0.82rem; }}
+  .btn-copy:hover {{ background: #2563eb; color: #fff; }}
   .avail-head {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
   .avail-head h2 {{ margin: 0; font-size: 1.15rem; color: #1e293b; }}
   .avail-controls {{ display: flex; align-items: center; gap: 8px; }}
@@ -265,7 +481,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   <header class="app-header">
     <div>
       <h1>あいぽーとセンター業務ポータル</h1>
-      <div class="subtitle">予定検索・空き状況確認・各種出力（週報／あいぽーと通信／ラジオ原稿）</div>
+      <div class="subtitle">予定検索・空き状況確認・ボランティア情報・各種出力（週報／あいぽーと通信／ラジオ原稿）</div>
       <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）</div>
     </div>
     <a class="btn-update-sm" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
@@ -281,6 +497,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <p>※データは毎朝6時00分に自動更新されます。手動で更新する場合は右上の「最新情報に更新」から、GitHubのページで「Run workflow」を押してください。</p>
     <p>※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。</p>
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
+    <p>※ボランティア募集情報は、情報提供書（太線枠の項目）をもとに自動掲載されます。募集締切を過ぎた情報は自動で非表示になります。</p>
     {radio_note}
   </div>
 
@@ -314,6 +531,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
       </div>
     </div>
   </div>
+
+  {volunteer_section}
 
   <div class="filters card">
     <div class="filters-head">
@@ -709,8 +928,10 @@ def main():
     week_end = week_start + datetime.timedelta(days=6)
     period_start = _newsletter_period_start(now)
     period_end = _period_end(period_start)
-    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end, availability, radio_monday, radio_filename)
+    volunteers = load_volunteers(now.date())
+    generate_html(all_events, updated_str, week_start, week_end, period_start, period_end, availability, radio_monday, radio_filename, volunteers)
     print(f"完了: {len(all_events)}件の予定を含む index.html を生成しました。")
+    print(f"ボランティア情報: {len(volunteers)}件を掲載しました。")
     generate_weekly_docx(all_events, week_start)
     print(f"週報: {week_start}からの7日分を weekly.docx に出力しました。")
     n_news = generate_newsletter_excel(all_events, period_start)
