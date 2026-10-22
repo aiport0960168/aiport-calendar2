@@ -6,6 +6,7 @@ import json
 import random
 import unicodedata
 from html import escape as _html_escape
+from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 from bs4 import BeautifulSoup
@@ -202,6 +203,56 @@ def find_double_use(events):
     return pairs
 
 
+def _org_norm(text, strong=False):
+    """団体名の正規化。strong=True では中黒・読点も除去する（表記ゆれ吸収用）"""
+    t = unicodedata.normalize("NFKC", text or "")
+    t = re.sub(r"\s+", "", t)
+    if strong:
+        t = t.replace("・", "").replace("、", "")
+    return t
+
+
+def find_org_name_issues(events):
+    """団体名の表記ゆれ・類似名を検出する（要確認リスト用。間違いの断定はしない）。
+    - 表記ゆれの疑い: 空白・全角半角・中黒・読点を除くと同一になるのに原文が異なる名前同士
+    - 類似名の候補: 類似度が高い、または一方が他方の接頭辞（数字だけの違いは期・班の区別として除外）"""
+    counts = {}
+    last = {}
+    for ev in events:
+        org = (ev.get("org") or "").strip()
+        if not org:
+            continue
+        counts[org] = counts.get(org, 0) + 1
+        if ev.get("date", "") > last.get(org, ""):
+            last[org] = ev.get("date", "")
+    names = sorted(counts)
+    strong = {n: _org_norm(n, strong=True) for n in names}
+    issues = []
+    groups = {}
+    for n in names:
+        groups.setdefault(strong[n], []).append(n)
+    for key, g in groups.items():
+        if len(g) > 1:
+            issues.append({"kind": "表記ゆれの疑い", "names": sorted(g)})
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a, b = names[i], names[j]
+            sa, sb = strong[a], strong[b]
+            if sa == sb:
+                continue
+            if re.sub(r"[0-9]", "", sa) == re.sub(r"[0-9]", "", sb):
+                continue
+            ratio = SequenceMatcher(None, sa, sb).ratio()
+            shorter, longer = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+            is_prefix = len(shorter) >= 5 and longer.startswith(shorter)
+            if ratio >= 0.88 or is_prefix:
+                issues.append({"kind": "類似名の候補", "names": [a, b]})
+    for iss in issues:
+        iss["counts"] = {n: counts[n] for n in iss["names"]}
+        iss["last"] = {n: last.get(n, "") for n in iss["names"]}
+    return issues
+
+
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
     events_json = json.dumps(events, ensure_ascii=False)
     availability_json = json.dumps(availability or {}, ensure_ascii=False)
@@ -229,12 +280,50 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                 '</div>'
             )
         double_use_card = (
-            '<div class="dup-card">'
-            f'<h2>⚠ 会場の二重使用チェック（{len(double_use_pairs)}組）</h2>'
+            '<button type="button" class="alert-chip dup" onclick="document.getElementById(\'dupModal\').classList.add(\'open\')">'
+            f'<span>⚠ 会場の二重使用チェック</span><span class="chip-open">{len(double_use_pairs)}組あります（クリックで詳細）</span></button>'
+            '<div class="modal-overlay" id="dupModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+            '<div class="modal-box">'
+            '<div class="modal-head">'
+            f'<h2 class="h2-dup">⚠ 会場の二重使用チェック（{len(double_use_pairs)}組）</h2>'
+            '<button type="button" class="modal-close" onclick="document.getElementById(\'dupModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
             '<p class="dup-note">同じ日・同じ会場で時間帯が重なっている予定です。登録ミスの可能性があるため、元の申込内容を確認してください。'
             '同じ団体がイベントコーナーと会議・セミナー室を同時に使う場合は会場が異なるため、ここには含まれません。</p>'
             + "".join(dup_items)
-            + '</div>'
+            + '</div></div>'
+        )
+    org_issues = find_org_name_issues(events)
+    org_check_card = ""
+    if org_issues:
+        print(f"団体名チェック: {len(org_issues)}件の要確認候補を検出しました。")
+        org_items = []
+        for iss in org_issues:
+            lines = []
+            for n in iss["names"]:
+                ld = iss["last"].get(n, "")
+                ld_label = ""
+                if ld:
+                    d2 = datetime.date.fromisoformat(ld)
+                    ld_label = f"・最終 {d2.month}/{d2.day}"
+                lines.append(f'<div class="dup-ev">{_html_escape(n)}（{iss["counts"][n]}件{ld_label}）</div>')
+            org_items.append(
+                '<div class="dup-item org-item">'
+                f'<div class="dup-date"><span class="badge badge-org">{iss["kind"]}</span></div>'
+                + "".join(lines)
+                + '</div>'
+            )
+        org_check_card = (
+            '<button type="button" class="alert-chip org" onclick="document.getElementById(\'orgModal\').classList.add(\'open\')">'
+            f'<span>団体名チェック（要確認）</span><span class="chip-open">{len(org_issues)}件あります（クリックで詳細）</span></button>'
+            '<div class="modal-overlay" id="orgModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+            '<div class="modal-box">'
+            '<div class="modal-head">'
+            f'<h2 class="h2-org">団体名チェック（要確認 {len(org_issues)}件）</h2>'
+            '<button type="button" class="modal-close" onclick="document.getElementById(\'orgModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
+            '<p class="org-note">似ている団体名の候補です。間違いと決まったものではありません（別の団体のこともあります）。'
+            '申込書や団体登録の正式名称と照合してください。表記ゆれは、件数の多い表記への統一が目安です。</p>'
+            + "".join(org_items)
+            + '</div></div>'
         )
     radio_label = ""
     radio_card = ""
@@ -283,8 +372,20 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .action-card.radio {{ border-left-color: #d97706; }}
   .info-box {{ background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }}
   .info-box p {{ margin: 3px 0; font-size: 0.8rem; color: #475569; }}
-  .dup-card {{ background: #fef2f2; border: 1px solid #fecaca; border-left: 6px solid #dc2626; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
-  .dup-card h2 {{ margin: 0 0 6px; font-size: 1.1rem; color: #b91c1c; }}
+  .alert-chip {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 16px; border-radius: 10px; margin-bottom: 10px; cursor: pointer; font-weight: bold; font-size: 0.95rem; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
+  .alert-chip.dup {{ background: #fef2f2; border: 1px solid #fecaca; border-left: 6px solid #dc2626; color: #b91c1c; }}
+  .alert-chip.org {{ background: #fffbeb; border: 1px solid #fde68a; border-left: 6px solid #d97706; color: #b45309; }}
+  .alert-chip:hover {{ box-shadow: 0 4px 14px rgba(15,23,42,0.12); }}
+  .chip-open {{ font-size: 0.82rem; white-space: nowrap; }}
+  .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 50; padding: 20px 12px; }}
+  .modal-overlay.open {{ display: block; }}
+  .modal-box {{ background: #fff; border-radius: 12px; max-width: 760px; margin: 0 auto; max-height: calc(100vh - 40px); overflow-y: auto; padding: 18px 20px; }}
+  .modal-head {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }}
+  .modal-head h2 {{ margin: 0; font-size: 1.1rem; }}
+  .h2-dup {{ color: #b91c1c; }}
+  .h2-org {{ color: #b45309; }}
+  .modal-close {{ padding: 7px 14px; border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; cursor: pointer; font-weight: bold; font-size: 0.85rem; color: #475569; white-space: nowrap; }}
+  .modal-close:hover {{ border-color: #dc2626; color: #dc2626; }}
   .dup-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #7f1d1d; }}
   .dup-item {{ background: #fff; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }}
   .dup-item:last-child {{ margin-bottom: 0; }}
@@ -292,6 +393,9 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .badge-dup {{ background: #fee2e2; color: #b91c1c; }}
   .dup-ov {{ color: #b91c1c; font-weight: bold; font-size: 0.85rem; }}
   .dup-ev {{ font-size: 0.9rem; color: #334155; padding: 2px 0; }}
+  .org-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #78350f; }}
+  .dup-item.org-item {{ border-color: #fde68a; }}
+  .badge-org {{ background: #fef3c7; color: #b45309; }}
   .card {{ background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
   .filters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; padding: 16px; margin-bottom: 16px; }}
   .filter-group label {{ display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 6px; color: #475569; }}
@@ -382,6 +486,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   </div>
 
   {double_use_card}
+
+  {org_check_card}
 
   <div class="card avail-card">
     <div class="avail-head">
