@@ -27,6 +27,15 @@
   .action-card.radio { border-left-color: #d97706; }
   .info-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
   .info-box p { margin: 3px 0; font-size: 0.8rem; color: #475569; }
+  .dup-card { background: #fef2f2; border: 1px solid #fecaca; border-left: 6px solid #dc2626; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }
+  .dup-card h2 { margin: 0 0 6px; font-size: 1.1rem; color: #b91c1c; }
+  .dup-note { margin: 0 0 10px; font-size: 0.82rem; color: #7f1d1d; }
+  .dup-item { background: #fff; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .dup-item:last-child { margin-bottom: 0; }
+  .dup-date { font-weight: bold; color: #1e293b; margin-bottom: 4px; }
+  .badge-dup { background: #fee2e2; color: #b91c1c; }
+  .dup-ov { color: #b91c1c; font-weight: bold; font-size: 0.85rem; }
+  .dup-ev { font-size: 0.9rem; color: #334155; padding: 2px 0; }
   .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }
   .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; padding: 16px; margin-bottom: 16px; }
   .filter-group label { display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 6px; color: #475569; }
@@ -98,7 +107,7 @@
     <div>
       <h1>あいぽーとセンター業務ポータル</h1>
       <div class="subtitle">予定検索・空き状況確認・各種出力（週報／あいぽーと通信／ラジオ原稿）</div>
-      <div class="updated">最終自動更新: 2026-10-22 06:19 （毎日1回自動更新）</div>
+      <div class="updated">最終自動更新: 2026-10-22 11:23 （毎日1回自動更新）</div>
     </div>
     <a class="btn-update-sm" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
   </header>
@@ -115,6 +124,8 @@
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
     <p>※ラジオ原稿は月曜放送分です。毎週水曜17時に翌週分へ切り替わります。今ダウンロードできるのは10月26日（月）放送分です。</p>
   </div>
+
+  <div class="dup-card"><h2>⚠ 会場の二重使用チェック（11組）</h2><p class="dup-note">同じ日・同じ会場で時間帯が重なっている予定です。登録ミスの可能性があるため、元の申込内容を確認してください。同じ団体がイベントコーナーと会議・セミナー室を同時に使う場合は会場が異なるため、ここには含まれません。</p><div class="dup-item"><div class="dup-date">10月5日（月） <span class="badge badge-dup">会議・セミナー室</span> <span class="dup-ov">重なり 13:00～14:30</span></div><div class="dup-ev">13時00分 ～ 14時30分　懐かしい盆踊りのボランティア会の打合せ、練習（懐かしい盆踊りの会）</div><div class="dup-ev">13時00分 ～ 17時00分　獲得するための資金づくり徹底セミナー　第3弾！（）</div></div><div class="dup-item"><div class="dup-date">10月11日（日） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 10:00～12:00</span></div><div class="dup-ev">10時00分 ～ 12時00分　南京玉すだれの練習（さわやか南京玉すだれを楽しむ会）</div><div class="dup-ev">10時00分 ～ 12時00分　ミニ交流会（熊本SCD・MSA友の会）</div></div><div class="dup-item"><div class="dup-date">10月22日（木） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 10:00～12:00</span></div><div class="dup-ev">10時00分 ～ 12時00分　ママ＆ベビー教室（（一社）熊本県助産師会）</div><div class="dup-ev">10時00分 ～ 12時00分　プレパパママ教室（（一社）熊本県助産師会）</div></div><div class="dup-item"><div class="dup-date">11月11日（水） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 10:00～11:30</span></div><div class="dup-ev">9時40分 ～ 11時30分　みんな笑顔で楽しく健康体操（KKA高齢者健康友の会）</div><div class="dup-ev">10時00分 ～ 12時00分　ママ＆ベビー教室（（一社）熊本県助産師会）</div></div><div class="dup-item"><div class="dup-date">11月20日（金） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 9:30～12:30</span></div><div class="dup-ev">9時30分 ～ 12時30分　シニアいきいきサロン（シニアクラブうらら）</div><div class="dup-ev">9時30分 ～ 12時30分　シニアいきいきサロン（シニアクラブうらら）</div></div><div class="dup-item"><div class="dup-date">11月23日（月） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 10:00～11:30</span></div><div class="dup-ev">10時00分 ～ 11時30分　フリートーキング（パレアひばりの会）</div><div class="dup-ev">10時00分 ～ 12時30分　懐かしい盆踊りのボランティア会の打合せ、練習（懐かしい盆踊りの会）</div></div><div class="dup-item"><div class="dup-date">12月20日（日） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 10:00～12:00</span></div><div class="dup-ev">10時00分 ～ 12時00分　プレパパママ教室（（一社）熊本県助産師会）</div><div class="dup-ev">10時00分 ～ 13時00分　熊日童話会「口演教室、月例童話会」（熊日童話会）</div></div><div class="dup-item"><div class="dup-date">1月19日（火） <span class="badge badge-dup">会議・セミナー室</span> <span class="dup-ov">重なり 13:20～16:40</span></div><div class="dup-ev">13時20分 ～ 16時40分　吹矢を楽しむ（楽しい健康吹き矢）</div><div class="dup-ev">13時20分 ～ 16時40分　吹矢を楽しむ（楽しい健康吹き矢）</div></div><div class="dup-item"><div class="dup-date">1月24日（日） <span class="badge badge-dup">イベントコーナー</span> <span class="dup-ov">重なり 13:30～15:30</span></div><div class="dup-ev">13時00分 ～ 15時50分　牛深ハイヤ踊りの練習（熊本さわやかハイヤ俱楽部）</div><div class="dup-ev">13時30分 ～ 15時30分　定例会・事例検討会（NPO法人傾聴ネットキーステーション）</div></div><div class="dup-item"><div class="dup-date">2月12日（金） <span class="badge badge-dup">会議・セミナー室</span> <span class="dup-ov">重なり 10:00～11:30</span></div><div class="dup-ev">9時30分 ～ 12時30分　シニアいきいきサロン（シニアクラブうらら）</div><div class="dup-ev">10時00分 ～ 11時30分　マージャン協会の座談会の打合せ（熊本健康マージャン協会）</div></div><div class="dup-item"><div class="dup-date">2月14日（日） <span class="badge badge-dup">会議・セミナー室</span> <span class="dup-ov">重なり 14:00～15:00</span></div><div class="dup-ev">13時30分 ～ 15時00分　傾聴ワンポイント講座（NPO法人傾聴ネットキーステーション）</div><div class="dup-ev">14時00分 ～ 16時30分　音楽を楽しむ（ブレーメンの音楽隊）</div></div></div>
 
   <div class="card avail-card">
     <div class="avail-head">
