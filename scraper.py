@@ -5,6 +5,7 @@ import re
 import json
 import random
 import unicodedata
+from html import escape as _html_escape
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 from bs4 import BeautifulSoup
@@ -145,9 +146,96 @@ def fetch_availability_day(session, target_date):
     return None
 
 
+def _parse_time_range(time_str):
+    """time文字列（例: 10時00分～12時30分）を (開始分, 終了分) に変換する。読めなければNone"""
+    t = (time_str or "").replace("〜", "～").replace("~", "～").replace(" ", "").replace("　", "")
+    m = re.search(r"(\d{1,2})時(?:(\d{1,2})分|(半))?\s*～\s*(\d{1,2})時(?:(\d{1,2})分|(半))?", t)
+    if not m:
+        return None
+
+    def _min(h, mi, half):
+        return int(h) * 60 + (int(mi) if mi else (30 if half else 0))
+
+    return (_min(m.group(1), m.group(2), m.group(3)), _min(m.group(4), m.group(5), m.group(6)))
+
+
+def _venues_of(room):
+    """会場カテゴリ文字列が含む会場の集合を返す（両方利用は両会場を返す）"""
+    venues = set()
+    if "イベント" in (room or ""):
+        venues.add("イベントコーナー")
+    if "会議" in (room or "") or "セミナー" in (room or ""):
+        venues.add("会議・セミナー室")
+    return venues
+
+
+def find_double_use(events):
+    """同じ日・同じ会場で時間帯が重なる行事ペアを検出する（会場の二重使用チェック）。
+    中止行事と時間が読み取れない行事は対象外。団体名は判定に使わない。"""
+    cancel_mark = LB + "中止" + RB
+    by_date = {}
+    for ev in events:
+        if cancel_mark in (ev.get("title") or ""):
+            continue
+        rng = _parse_time_range(ev.get("time") or "")
+        venues = _venues_of(ev.get("room") or "")
+        if rng is None or not venues:
+            continue
+        by_date.setdefault(ev["date"], []).append((rng, venues, ev))
+    pairs = []
+    for date_str in sorted(by_date):
+        lst = by_date[date_str]
+        for i in range(len(lst)):
+            for j in range(i + 1, len(lst)):
+                (s1, e1), v1, a = lst[i]
+                (s2, e2), v2, b = lst[j]
+                shared = [v for v in ["イベントコーナー", "会議・セミナー室"] if v in v1 and v in v2]
+                if shared and s1 < e2 and s2 < e1:
+                    pairs.append({
+                        "date": date_str,
+                        "weekday": a.get("weekday", ""),
+                        "venues": shared,
+                        "overlap": (max(s1, s2), min(e1, e2)),
+                        "a": a,
+                        "b": b,
+                    })
+    return pairs
+
+
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
     events_json = json.dumps(events, ensure_ascii=False)
     availability_json = json.dumps(availability or {}, ensure_ascii=False)
+    double_use_pairs = find_double_use(events)
+    double_use_card = ""
+    if double_use_pairs:
+        print(f"会場の二重使用チェック: {len(double_use_pairs)}組を検出しました。")
+
+        def _fmt_min(mins):
+            return f"{mins // 60}:{mins % 60:02d}"
+
+        dup_items = []
+        for p in double_use_pairs:
+            a, b = p["a"], p["b"]
+            d_obj = datetime.date.fromisoformat(p["date"])
+            venue_label = "・".join(p["venues"])
+            ov_label = _fmt_min(p["overlap"][0]) + "～" + _fmt_min(p["overlap"][1])
+            dup_items.append(
+                '<div class="dup-item">'
+                f'<div class="dup-date">{d_obj.month}月{d_obj.day}日（{p["weekday"]}） '
+                f'<span class="badge badge-dup">{_html_escape(venue_label)}</span> '
+                f'<span class="dup-ov">重なり {ov_label}</span></div>'
+                f'<div class="dup-ev">{_html_escape(a.get("time", ""))}　{_html_escape(a.get("title", ""))}（{_html_escape(a.get("org", ""))}）</div>'
+                f'<div class="dup-ev">{_html_escape(b.get("time", ""))}　{_html_escape(b.get("title", ""))}（{_html_escape(b.get("org", ""))}）</div>'
+                '</div>'
+            )
+        double_use_card = (
+            '<div class="dup-card">'
+            f'<h2>⚠ 会場の二重使用チェック（{len(double_use_pairs)}組）</h2>'
+            '<p class="dup-note">同じ日・同じ会場で時間帯が重なっている予定です。登録ミスの可能性があるため、元の申込内容を確認してください。'
+            '同じ団体がイベントコーナーと会議・セミナー室を同時に使う場合は会場が異なるため、ここには含まれません。</p>'
+            + "".join(dup_items)
+            + '</div>'
+        )
     radio_label = ""
     radio_card = ""
     radio_note = ""
@@ -195,6 +283,15 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .action-card.radio {{ border-left-color: #d97706; }}
   .info-box {{ background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }}
   .info-box p {{ margin: 3px 0; font-size: 0.8rem; color: #475569; }}
+  .dup-card {{ background: #fef2f2; border: 1px solid #fecaca; border-left: 6px solid #dc2626; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
+  .dup-card h2 {{ margin: 0 0 6px; font-size: 1.1rem; color: #b91c1c; }}
+  .dup-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #7f1d1d; }}
+  .dup-item {{ background: #fff; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }}
+  .dup-item:last-child {{ margin-bottom: 0; }}
+  .dup-date {{ font-weight: bold; color: #1e293b; margin-bottom: 4px; }}
+  .badge-dup {{ background: #fee2e2; color: #b91c1c; }}
+  .dup-ov {{ color: #b91c1c; font-weight: bold; font-size: 0.85rem; }}
+  .dup-ev {{ font-size: 0.9rem; color: #334155; padding: 2px 0; }}
   .card {{ background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
   .filters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; padding: 16px; margin-bottom: 16px; }}
   .filter-group label {{ display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 6px; color: #475569; }}
@@ -283,6 +380,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
     {radio_note}
   </div>
+
+  {double_use_card}
 
   <div class="card avail-card">
     <div class="avail-head">
