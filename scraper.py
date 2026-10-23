@@ -334,7 +334,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             + "".join(org_items)
             + '</div></div>'
         )
-    miss_fields = [("place", "会場"), ("fee", "料金"), ("org", "団体名"), ("time", "時間"), ("title", "タイトル")]
+    miss_fields = [("fee", "料金"), ("org", "団体名"), ("time", "時間"), ("title", "タイトル")]
     miss_counts = {label: 0 for _, label in miss_fields}
     miss_events = []
     for e in events:
