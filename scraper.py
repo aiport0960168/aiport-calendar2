@@ -429,10 +429,11 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                     f'{_html_escape(e.get("time", ""))}\u3000{_html_escape(e.get("title", ""))}'
                     f'\uff08{_html_escape(e.get("org", ""))}\uff09 [{_html_escape(e.get("room", ""))}]{cancelled_mark}</div>'
                 )
+            summary_text = "\u3001".join(summary_parts)
             group_html.append(
                 '<div class="dup-item new-item">'
                 f'<div class="dup-date">{d_fs.month}\u6708{d_fs.day}\u65e5\u306b\u521d\u78ba\u8a8d\uff08{len(g)}\u4ef6\uff09</div>'
-                f'<div class="dup-ev">\u5bfe\u8c61\u65e5: {"\u3001".join(summary_parts)}</div>'
+                f'<div class="dup-ev">\u5bfe\u8c61\u65e5: {summary_text}</div>'
                 + "".join(ev_lines)
                 + '</div>'
             )
