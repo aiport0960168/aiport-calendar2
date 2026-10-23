@@ -275,8 +275,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                 f'<div class="dup-date">{d_obj.month}月{d_obj.day}日（{p["weekday"]}） '
                 f'<span class="badge badge-dup">{_html_escape(venue_label)}</span> '
                 f'<span class="dup-ov">重なり {ov_label}</span></div>'
-                f'<div class="dup-ev">{_html_escape(a.get("time", ""))}　{_html_escape(a.get("title", ""))}（{_html_escape(a.get("org", ""))}）</div>'
-                f'<div class="dup-ev">{_html_escape(b.get("time", ""))}　{_html_escape(b.get("title", ""))}（{_html_escape(b.get("org", ""))}）</div>'
+                f'<div class="dup-ev">{_html_escape(a.get("time", ""))}　{_html_escape(a.get("title", ""))}（{_html_escape(a.get("org", ""))}） <a class="btn-link" href="{_html_escape(a.get("url", ""))}" target="_blank" rel="noopener">公式で確認</a></div>'
+                f'<div class="dup-ev">{_html_escape(b.get("time", ""))}　{_html_escape(b.get("title", ""))}（{_html_escape(b.get("org", ""))}） <a class="btn-link" href="{_html_escape(b.get("url", ""))}" target="_blank" rel="noopener">公式で確認</a></div>'
                 '</div>'
             )
         double_use_card = (
@@ -292,6 +292,13 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             + "".join(dup_items)
             + '</div></div>'
         )
+    org_latest = {}
+    for e in events:
+        _oname = e.get("org", "")
+        if _oname:
+            _cur = org_latest.get(_oname)
+            if _cur is None or e["date"] >= _cur[0]:
+                org_latest[_oname] = (e["date"], e.get("url", ""))
     org_issues = find_org_name_issues(events)
     org_check_card = ""
     if org_issues:
@@ -305,7 +312,9 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                 if ld:
                     d2 = datetime.date.fromisoformat(ld)
                     ld_label = f"・最終 {d2.month}/{d2.day}"
-                lines.append(f'<div class="dup-ev">{_html_escape(n)}（{iss["counts"][n]}件{ld_label}）</div>')
+                _ourl = org_latest.get(n, ("", ""))[1]
+                _olink = f' <a class="btn-link" href="{_html_escape(_ourl)}" target="_blank" rel="noopener">公式で確認</a>' if _ourl else ""
+                lines.append(f'<div class="dup-ev">{_html_escape(n)}（{iss["counts"][n]}件{ld_label}）{_olink}</div>')
             org_items.append(
                 '<div class="dup-item org-item">'
                 f'<div class="dup-date"><span class="badge badge-org">{iss["kind"]}</span></div>'
@@ -321,7 +330,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             f'<h2 class="h2-org">団体名チェック（要確認 {len(org_issues)}件）</h2>'
             '<button type="button" class="modal-close" onclick="document.getElementById(\'orgModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
             '<p class="org-note">似ている団体名の候補です。間違いと決まったものではありません（別の団体のこともあります）。'
-            '申込書や団体登録の正式名称と照合してください。表記ゆれは、件数の多い表記への統一が目安です。</p>'
+            '申込書や団体登録の正式名称と照合してください。表記ゆれは、件数の多い表記への統一が目安です。「公式で確認」は、その名前で直近の行事の公式ページを開きます。</p>'
             + "".join(org_items)
             + '</div></div>'
         )
@@ -345,7 +354,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             miss_items.append(
                 '<div class="dup-item miss-item">'
                 f'<div class="dup-date">{dd.month}月{dd.day}日（{e.get("weekday", "")}） {badges}</div>'
-                f'<div class="dup-ev">{_html_escape(e.get("time", ""))}　{_html_escape(e.get("title", ""))}（{_html_escape(e.get("org", ""))}）</div>'
+                f'<div class="dup-ev">{_html_escape(e.get("time", ""))}　{_html_escape(e.get("title", ""))}（{_html_escape(e.get("org", ""))}） <a class="btn-link" href="{_html_escape(e.get("url", ""))}" target="_blank" rel="noopener">公式で確認</a></div>'
                 '</div>'
             )
         missing_card = (
@@ -427,7 +436,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
                 ev_lines.append(
                     f'<div class="dup-ev">{dd.month}/{dd.day}\uff08{e.get("weekday", "")}\uff09 '
                     f'{_html_escape(e.get("time", ""))}\u3000{_html_escape(e.get("title", ""))}'
-                    f'\uff08{_html_escape(e.get("org", ""))}\uff09 [{_html_escape(e.get("room", ""))}]{cancelled_mark}</div>'
+                    f'\uff08{_html_escape(e.get("org", ""))}\uff09 [{_html_escape(e.get("room", ""))}]{cancelled_mark} <a class="btn-link" href="{_html_escape(e.get("url", ""))}" target="_blank" rel="noopener">公式で確認</a></div>'
                 )
             summary_text = "\u3001".join(summary_parts)
             group_html.append(
