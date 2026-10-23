@@ -1,4 +1,7 @@
+import csv
 import datetime
+import hashlib
+import io
 import time
 import os
 import re
@@ -7,7 +10,7 @@ import random
 import unicodedata
 from html import escape as _html_escape
 from difflib import SequenceMatcher
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs, quote
 import requests
 from bs4 import BeautifulSoup
 from docx import Document
@@ -19,10 +22,27 @@ from docx.shared import Mm, Pt, RGBColor
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
+try:
+    import segno
+except ImportError:
+    segno = None
+
 BASE_URL = "https://www.kumamoto-aiport.com/cal_copy/pub/default.aspx"
 AVAIL_URL = "https://www.kumamoto-aiport.com/reservation_sts/pub/default.aspx"
 CACHE_PATH = "cache.json"
 HTML_PATH = "index.html"
+
+# ---- Participants (Google Forms) ----
+# Fill these three after creating the input form (see the setup guide).
+# While empty, the participants feature stays off and the page is unchanged.
+PARTICIPANT_FORM_BASE = os.environ.get("AIPORT_PARTICIPANT_FORM_BASE", "")
+PARTICIPANT_ENTRY = {
+    "date": os.environ.get("AIPORT_PARTICIPANT_ENTRY_DATE", ""),
+    "title": os.environ.get("AIPORT_PARTICIPANT_ENTRY_TITLE", ""),
+    "org": os.environ.get("AIPORT_PARTICIPANT_ENTRY_ORG", ""),
+    "key": os.environ.get("AIPORT_PARTICIPANT_ENTRY_KEY", ""),
+}
+PARTICIPANT_CSV_URL = os.environ.get("AIPORT_PARTICIPANT_CSV_URL", "")
 
 # sumitsuki-kakko (U+3010 / U+3011) built via chr() to keep this file ASCII-safe
 LB = chr(0x3010)
@@ -253,6 +273,89 @@ def find_org_name_issues(events):
     return issues
 
 
+def participant_key(e):
+    # Stable key that links a form response to one event.
+    base = (e.get("url") or "") or (e["date"] + "|" + (e.get("title") or ""))
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
+
+
+def participant_form_link(e):
+    # Google Forms URL with the event's date / title / org / key prefilled.
+    if not PARTICIPANT_FORM_BASE or not all(PARTICIPANT_ENTRY.values()):
+        return ""
+    params = [
+        (PARTICIPANT_ENTRY["date"], e["date"]),
+        (PARTICIPANT_ENTRY["title"], e.get("title", "")),
+        (PARTICIPANT_ENTRY["org"], e.get("org", "")),
+        (PARTICIPANT_ENTRY["key"], participant_key(e)),
+    ]
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params)
+    sep = "&" if "?" in PARTICIPANT_FORM_BASE else "?"
+    return PARTICIPANT_FORM_BASE + sep + "usp=pp_url&" + qs
+
+
+def fetch_participants():
+    # Read the responses CSV; return {event_key: (total, non_members)}.
+    # Rows come oldest first, so a later row overwrites an earlier one.
+    counts = {}
+    if not PARTICIPANT_CSV_URL:
+        return counts
+    try:
+        if PARTICIPANT_CSV_URL.startswith("http"):
+            resp = requests.get(PARTICIPANT_CSV_URL, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            text = resp.content.decode("utf-8-sig")
+        else:
+            with open(PARTICIPANT_CSV_URL, encoding="utf-8-sig") as f:
+                text = f.read()
+    except Exception as ex:
+        print(f"participants: failed to load responses ({ex})")
+        return counts
+    try:
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except Exception as ex:
+        print(f"participants: failed to parse responses ({ex})")
+        return counts
+    if not rows:
+        return counts
+    headers = list(rows[0].keys())
+
+    def _find_col(*needles):
+        for h in headers:
+            hn = (h or "").strip()
+            if any(n in hn for n in needles):
+                return h
+        return None
+
+    key_col = _find_col("行事キー", "キー")
+    total_col = _find_col("総参加")
+    if total_col is None:
+        total_col = _find_col("参加人数", "参加数")
+    nonmem_col = _find_col("会員外")
+    if key_col is None or total_col is None:
+        print("participants: key/total column not found in responses")
+        return counts
+
+    def _num(row, col):
+        if col is None:
+            return 0
+        raw = (row.get(col) or "").strip().replace(",", "").replace("人", "")
+        try:
+            return int(float(raw))
+        except ValueError:
+            return None
+
+    for row in rows:
+        k = (row.get(key_col) or "").strip()
+        total = _num(row, total_col)
+        if not k or total is None:
+            continue
+        nonmem = _num(row, nonmem_col)
+        counts[k] = (total, nonmem if nonmem is not None else 0)
+    print(f"participants: {len(counts)} events have counts")
+    return counts
+
+
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
     events_json = json.dumps(events, ensure_ascii=False)
     availability_json = json.dumps(availability or {}, ensure_ascii=False)
@@ -369,10 +472,13 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             + "".join(miss_items)
             + '</div></div>'
         )
+    participants = fetch_participants()
+    csv_ready = bool(PARTICIPANT_CSV_URL)
+    form_ready = bool(PARTICIPANT_FORM_BASE and all(PARTICIPANT_ENTRY.values()))
     monthly_stats = {}
     for e in events:
         ym = e["date"][:7]
-        st = monthly_stats.setdefault(ym, {"total": 0, "event": 0, "seminar": 0, "both": 0, "other": 0, "cancelled": 0, "orgs": set()})
+        st = monthly_stats.setdefault(ym, {"total": 0, "event": 0, "seminar": 0, "both": 0, "other": 0, "cancelled": 0, "participants": 0, "nonmembers": 0, "entered": 0, "orgs": set()})
         st["total"] += 1
         room = e.get("room", "")
         if room == "イベントコーナー・会議セミナー室":
@@ -385,6 +491,12 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             st["other"] += 1
         if "中止" in e.get("title", ""):
             st["cancelled"] += 1
+        if csv_ready and "中止" not in e.get("title", ""):
+            _pc = participants.get(participant_key(e))
+            if _pc is not None:
+                st["participants"] += _pc[0]
+                st["nonmembers"] += _pc[1]
+                st["entered"] += 1
         org_name = (e.get("org") or "").strip()
         if org_name:
             st["orgs"].add(org_name)
@@ -392,11 +504,14 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     for ym in sorted(monthly_stats.keys()):
         st = monthly_stats[ym]
         y_str, m_str = ym.split("-")
+        _people_cells = f'<td>{st["participants"]}</td><td>{st["nonmembers"]}</td><td>{st["entered"]}</td>' if csv_ready else ""
         stats_rows.append(
             f'<tr><td class="date-cell">{int(y_str)}年{int(m_str)}月</td>'
             f'<td>{st["total"]}</td><td>{st["event"]}</td><td>{st["seminar"]}</td>'
-            f'<td>{st["both"]}</td><td>{st["other"]}</td><td>{len(st["orgs"])}</td><td>{st["cancelled"]}</td></tr>'
+            f'<td>{st["both"]}</td><td>{st["other"]}</td><td>{len(st["orgs"])}</td>{_people_cells}<td>{st["cancelled"]}</td></tr>'
         )
+    stats_people_th = '<th>参加人数</th><th>うち会員外</th><th>人数入力済</th>' if csv_ready else ""
+    stats_people_note = '参加人数は入力フォームの回答（行事ごとに最新の回答を採用）の集計です。人数入力済は、参加人数が入力されている行事の数です。' if csv_ready else ""
     stats_card = (
         '<button type="button" class="action-card stats" onclick="document.getElementById(\'statsModal\').classList.add(\'open\')">'
         '📊 月次利用サマリ<span>クリックで月別の利用状況を開きます</span></button>'
@@ -405,13 +520,102 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
         '<div class="modal-head">'
         '<h2 class="h2-stats">月次利用サマリ</h2>'
         '<button type="button" class="modal-close" onclick="document.getElementById(\'statsModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
-        '<p class="stats-note">現在の掲載データからの自動集計です。行事数は中止分も含みます。利用団体数は団体名の種類数（空欄を除く）です。</p>'
+        '<p class="stats-note">現在の掲載データからの自動集計です。行事数は中止分も含みます。利用団体数は団体名の種類数（空欄を除く）です。'
+        + stats_people_note
+        + '</p>'
         '<div class="table-wrap"><table><thead><tr>'
-        '<th>月</th><th>行事数</th><th>イベントコーナー</th><th>会議セミナー室</th><th>両方</th><th>その他</th><th>利用団体数</th><th>中止</th>'
+        '<th>月</th><th>行事数</th><th>イベントコーナー</th><th>会議セミナー室</th><th>両方</th><th>その他</th><th>利用団体数</th>'
+        + stats_people_th
+        + '<th>中止</th>'
         '</tr></thead><tbody>'
         + "".join(stats_rows)
         + '</tbody></table></div></div></div>'
     )
+    people_card = ""
+    if form_ready:
+        try:
+            run_date = datetime.date.fromisoformat(updated_str[:10])
+        except Exception:
+            run_date = week_start
+        run_ym = run_date.strftime("%Y-%m")
+
+        def _qr_svg(link):
+            if segno is None:
+                return ""
+            try:
+                return segno.make(link, error="m").svg_inline(scale=3, border=1, dark="#1e293b")
+            except Exception:
+                return ""
+
+        qr_end = run_date + datetime.timedelta(days=7)
+        qr_events = [e for e in events
+                     if run_date.isoformat() <= e["date"] <= qr_end.isoformat()
+                     and "中止" not in e.get("title", "")]
+        qr_events.sort(key=lambda e: (e["date"], e.get("time", ""), e["id"]))
+        qr_blocks = []
+        _cur_date = None
+        for e in qr_events:
+            if e["date"] != _cur_date:
+                _cur_date = e["date"]
+                d_obj = datetime.date.fromisoformat(e["date"])
+                qr_blocks.append(f'<div class="qr-date">{d_obj.month}月{d_obj.day}日（{e["weekday"]}）</div>')
+            link = participant_form_link(e)
+            _pc = participants.get(participant_key(e))
+            if _pc is not None:
+                status = f'<span class="qr-done">入力済み：{_pc[0]}人（うち会員外{_pc[1]}人）</span>'
+            else:
+                status = f'<a class="btn-link" href="{_html_escape(link)}" target="_blank" rel="noopener">入力フォームを開く</a>'
+            qr_blocks.append(
+                '<div class="qr-item">'
+                f'<div class="qr-fig">{_qr_svg(link)}</div>'
+                '<div class="qr-meta">'
+                f'<div class="qr-ev">{_html_escape(e.get("time", ""))}　{_html_escape(e.get("title", ""))}</div>'
+                f'<div class="qr-org">{_html_escape(e.get("org", ""))}／{_html_escape(e.get("room", ""))}　{status}</div>'
+                '</div></div>'
+            )
+        month_done = [e for e in events
+                      if e["date"][:7] == run_ym and e["date"] <= run_date.isoformat()
+                      and "中止" not in e.get("title", "")]
+        month_entered = [e for e in month_done if participant_key(e) in participants]
+        month_people = sum(participants[participant_key(e)][0] for e in month_entered)
+        month_nonmem = sum(participants[participant_key(e)][1] for e in month_entered)
+        past_missing = [e for e in month_done if participant_key(e) not in participants]
+        past_missing.sort(key=lambda e: (e["date"], e.get("time", ""), e["id"]))
+        pm_items = []
+        for e in past_missing[:60]:
+            d_obj = datetime.date.fromisoformat(e["date"])
+            link = participant_form_link(e)
+            pm_items.append(
+                '<div class="dup-ev">'
+                f'{d_obj.month}/{d_obj.day}（{e["weekday"]}） {_html_escape(e.get("time", ""))}　{_html_escape(e.get("title", ""))}（{_html_escape(e.get("org", ""))}） '
+                f'<a class="btn-link" href="{_html_escape(link)}" target="_blank" rel="noopener">人数を入力</a></div>'
+            )
+        pm_html = ""
+        if pm_items:
+            pm_html = (
+                '<h3 class="people-h3">今月分で、参加人数がまだ入っていない行事（終了分）</h3>'
+                + "".join(pm_items)
+            )
+        people_card = (
+            '<button type="button" class="action-card people" onclick="document.getElementById(\'peopleModal\').classList.add(\'open\')">'
+            '👥 参加人数の入力・状況<span>QRコードやリンクから参加人数を入力／今月の入力状況</span></button>'
+            '<div class="modal-overlay" id="peopleModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+            '<div class="modal-box wide">'
+            '<div class="modal-head">'
+            '<h2 class="h2-people">参加人数の入力・状況</h2>'
+            '<button type="button" class="modal-close" onclick="document.getElementById(\'peopleModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
+            f'<p class="people-note">今月（{run_date.month}月）の参加人数の合計は <b>{month_people}人</b>（うち会員外 {month_nonmem}人）です。入力済みは、終了した行事 {len(month_done)} 件中 {len(month_entered)} 件です。スタッフが紙の活動報告書から転記する想定です（団体からの直接入力も可能です）。同じ行事に複数の回答があった場合は最新の回答を採用します。</p>'
+            '<h3 class="people-h3">直近8日間の行事（QRコード）</h3>'
+            '<p class="people-note">QRコードを読み取るか「入力フォームを開く」を押すと、その行事の情報（日付・行事名・団体名）が入ったフォームが開きます。総参加数と会員外人数だけ入力して送信してください。</p>'
+            '<div id="peoplePrint">'
+            + "".join(qr_blocks)
+            + '</div>'
+            '<p><button type="button" class="btn-print" onclick="printQrSheet()">🖨 QRシートを印刷用に開く</button></p>'
+            + pm_html
+            + '</div></div>'
+            '<script>function printQrSheet(){var s=document.getElementById("peoplePrint").innerHTML;var w=window.open("","_blank");if(!w){alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");return;}'
+            'w.document.write("<!DOCTYPE html><html lang=\\"ja\\"><head><meta charset=\\"utf-8\\"><title>参加人数入力QRシート</title><style>body{font-family:sans-serif;margin:16px}.qr-item{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ccc;padding:8px 0}.qr-fig svg{width:96px;height:96px}.qr-date{font-weight:bold;margin-top:14px}.qr-ev{font-weight:bold}.qr-org{font-size:12px;color:#555}.qr-done{color:#15803d;font-weight:bold}a{display:none}</style></head><body><h1>参加人数入力QRシート</h1>"+s+"</body></html>");w.document.close();}</script>'
+        )
     new_groups = {}
     for e in events:
         fs = e.get("firstSeen")
@@ -521,6 +725,17 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .dup-item.new-item {{ border-color: #bfdbfe; }}
   .stats-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #64748b; }}
   .h2-stats {{ color: #6d28d9; }}
+  .action-card.people {{ border-left-color: #059669; }}
+  .h2-people {{ color: #059669; }}
+  .people-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #334155; }}
+  .people-h3 {{ margin: 14px 0 6px; font-size: 0.95rem; color: #065f46; }}
+  .qr-date {{ font-weight: bold; margin: 12px 0 4px; color: #1e293b; }}
+  .qr-item {{ display: flex; gap: 12px; align-items: center; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: #fff; }}
+  .qr-fig svg {{ width: 84px; height: 84px; display: block; }}
+  .qr-ev {{ font-weight: bold; }}
+  .qr-org {{ font-size: 0.82rem; color: #64748b; margin-top: 2px; }}
+  .qr-done {{ color: #15803d; font-weight: bold; }}
+  .btn-print {{ font: inherit; cursor: pointer; border: 1px solid #059669; color: #059669; background: #ecfdf5; border-radius: 8px; padding: 6px 12px; }}
   .modal-box.wide {{ max-width: 920px; }}
   .alert-chip.miss {{ background: #f0fdfa; border: 1px solid #99f6e4; border-left: 6px solid #0d9488; color: #0f766e; }}
   .h2-miss {{ color: #0f766e; }}
@@ -629,6 +844,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <a class="action-card excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）<span>対象: {period_label}分</span></a>
     {radio_card}
     {stats_card}
+    {people_card}
   </div>
 
   <div class="info-box">
