@@ -930,7 +930,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <div>
       <h1>あいぽーとセンター業務ポータル</h1>
       <div class="subtitle">予定検索・空き状況確認・各種出力（週報／あいぽーと通信／ラジオ原稿）</div>
-      <div class="updated">最終自動更新: {updated_str} （毎日1回自動更新）</div>
+      <div class="updated">最終自動更新: {updated_str} （毎日6時・17時に自動更新）</div>
     </div>
     <a class="btn-update-sm" href="https://github.com/aiport0960168/aiport-calendar2/actions/workflows/update_data.yml" target="_blank" rel="noopener">🔄 最新情報に更新</a>
   </header>
@@ -944,7 +944,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   </div>
 
   <div class="info-box">
-    <p>※データは毎朝6時00分に自動更新されます。手動で更新する場合は右上の「最新情報に更新」から、GitHubのページで「Run workflow」を押してください。</p>
+    <p>※データは毎日6時00分と17時00分に自動更新されます。手動で更新する場合は右上の「最新情報に更新」から、GitHubのページで「Run workflow」を押してください。</p>
     <p>※週報は今週の月曜〜日曜の7日分（1日1ページ）です。木曜17時以降は翌週分に切り替わります。</p>
     <p>※あいぽーと通信用カレンダーは16日〜翌月15日分です。毎月15日17時に、翌月16日〜翌々月15日分へ切り替わります。</p>
     {radio_note}
