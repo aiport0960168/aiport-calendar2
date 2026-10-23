@@ -49,6 +49,10 @@ PARTICIPANT_CSV_URL = os.environ.get(
     "AIPORT_PARTICIPANT_CSV_URL",
     "https://docs.google.com/spreadsheets/d/13jG9rfVADRq0T77W7n2h5g2ORid_mi_1lV6_IBXRlCo/export?format=csv&gid=1403488226",
 )
+# Responses with this key are meeting-space usage counts (summed per day,
+# one response per use). It never collides with an event key (sha1 hex).
+MEETING_KEY = "meetingspace"
+MEETING_TITLE = "ミーティングスペース利用"
 
 # sumitsuki-kakko (U+3010 / U+3011) built via chr() to keep this file ASCII-safe
 LB = chr(0x3010)
@@ -300,12 +304,46 @@ def participant_form_link(e):
     return PARTICIPANT_FORM_BASE + sep + "usp=pp_url&" + qs
 
 
+def meeting_form_link():
+    # Prefilled form link for meeting-space usage (one response per use).
+    if not PARTICIPANT_FORM_BASE or not all(PARTICIPANT_ENTRY.values()):
+        return ""
+    params = [
+        (PARTICIPANT_ENTRY["title"], MEETING_TITLE),
+        (PARTICIPANT_ENTRY["key"], MEETING_KEY),
+    ]
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params)
+    sep = "&" if "?" in PARTICIPANT_FORM_BASE else "?"
+    return PARTICIPANT_FORM_BASE + sep + "usp=pp_url&" + qs
+
+
+def _parse_any_date(s):
+    s = (s or "").strip()
+    if not s:
+        return None
+    s = s.replace("年", "-").replace("月", "-").replace("日", "")
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                "%Y/%m/%d %H:%M", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y"):
+        try:
+            return datetime.datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    try:
+        return datetime.date.fromisoformat(s[:10].replace("/", "-")).isoformat()
+    except ValueError:
+        return None
+
+
 def fetch_participants():
-    # Read the responses CSV; return {event_key: (total, non_members)}.
-    # Rows come oldest first, so a later row overwrites an earlier one.
+    # Read the responses CSV; return (counts, meeting).
+    # counts: {event_key: (total, non_members)}; event rows come oldest first,
+    # so a later row overwrites an earlier one (latest response wins).
+    # meeting: {date_str: [total_people, n_entries]} for meeting-space rows,
+    # which are summed per day (one response per use).
     counts = {}
+    meeting = {}
     if not PARTICIPANT_CSV_URL:
-        return counts
+        return counts, meeting
     try:
         if PARTICIPANT_CSV_URL.startswith("http"):
             resp = requests.get(PARTICIPANT_CSV_URL, headers=HEADERS, timeout=20)
@@ -316,14 +354,14 @@ def fetch_participants():
                 text = f.read()
     except Exception as ex:
         print(f"participants: failed to load responses ({ex})")
-        return counts
+        return counts, meeting
     try:
         rows = list(csv.DictReader(io.StringIO(text)))
     except Exception as ex:
         print(f"participants: failed to parse responses ({ex})")
-        return counts
+        return counts, meeting
     if not rows:
-        return counts
+        return counts, meeting
     headers = list(rows[0].keys())
 
     def _find_col(*needles):
@@ -338,9 +376,11 @@ def fetch_participants():
     if total_col is None:
         total_col = _find_col("参加人数", "参加数")
     nonmem_col = _find_col("会員外")
+    date_col = _find_col("日付")
+    ts_col = _find_col("タイムスタンプ", "Timestamp")
     if key_col is None or total_col is None:
         print("participants: key/total column not found in responses")
-        return counts
+        return counts, meeting
 
     def _num(row, col):
         if col is None:
@@ -354,12 +394,25 @@ def fetch_participants():
     for row in rows:
         k = (row.get(key_col) or "").strip()
         total = _num(row, total_col)
-        if not k or total is None:
+        if total is None:
+            continue
+        if k == MEETING_KEY:
+            d = _parse_any_date(row.get(date_col)) if date_col else None
+            if d is None and ts_col:
+                d = _parse_any_date(row.get(ts_col))
+            if d is None:
+                continue
+            slot = meeting.setdefault(d, [0, 0])
+            slot[0] += total
+            slot[1] += 1
+            continue
+        if not k:
             continue
         nonmem = _num(row, nonmem_col)
         counts[k] = (total, nonmem if nonmem is not None else 0)
-    print(f"participants: {len(counts)} events have counts")
-    return counts
+    m_people = sum(v[0] for v in meeting.values())
+    print(f"participants: {len(counts)} events have counts; meeting space {m_people} people in {len(meeting)} days")
+    return counts, meeting
 
 
 def generate_html(events, updated_str, week_start, week_end, period_start, period_end, availability=None, radio_monday=None, radio_filename=None):
@@ -478,13 +531,18 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             + "".join(miss_items)
             + '</div></div>'
         )
-    participants = fetch_participants()
+    participants, meeting_by_date = fetch_participants()
     csv_ready = bool(PARTICIPANT_CSV_URL)
     form_ready = bool(PARTICIPANT_FORM_BASE and all(PARTICIPANT_ENTRY.values()))
+
+    def _empty_stat():
+        return {"total": 0, "event": 0, "seminar": 0, "both": 0, "other": 0, "cancelled": 0,
+                "participants": 0, "nonmembers": 0, "entered": 0, "meeting": 0, "orgs": set()}
+
     monthly_stats = {}
     for e in events:
         ym = e["date"][:7]
-        st = monthly_stats.setdefault(ym, {"total": 0, "event": 0, "seminar": 0, "both": 0, "other": 0, "cancelled": 0, "participants": 0, "nonmembers": 0, "entered": 0, "orgs": set()})
+        st = monthly_stats.setdefault(ym, _empty_stat())
         st["total"] += 1
         room = e.get("room", "")
         if room == "イベントコーナー・会議セミナー室":
@@ -506,18 +564,21 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
         org_name = (e.get("org") or "").strip()
         if org_name:
             st["orgs"].add(org_name)
+    for _dstr, _slot in meeting_by_date.items():
+        _mst = monthly_stats.setdefault(_dstr[:7], _empty_stat())
+        _mst["meeting"] += _slot[0]
     stats_rows = []
     for ym in sorted(monthly_stats.keys()):
         st = monthly_stats[ym]
         y_str, m_str = ym.split("-")
-        _people_cells = f'<td>{st["participants"]}</td><td>{st["nonmembers"]}</td><td>{st["entered"]}</td>' if csv_ready else ""
+        _people_cells = f'<td>{st["participants"]}</td><td>{st["nonmembers"]}</td><td>{st["entered"]}</td><td>{st["meeting"]}</td>' if csv_ready else ""
         stats_rows.append(
             f'<tr><td class="date-cell">{int(y_str)}年{int(m_str)}月</td>'
             f'<td>{st["total"]}</td><td>{st["event"]}</td><td>{st["seminar"]}</td>'
             f'<td>{st["both"]}</td><td>{st["other"]}</td><td>{len(st["orgs"])}</td>{_people_cells}<td>{st["cancelled"]}</td></tr>'
         )
-    stats_people_th = '<th>参加人数</th><th>うち会員外</th><th>人数入力済</th>' if csv_ready else ""
-    stats_people_note = '参加人数は入力フォームの回答（行事ごとに最新の回答を採用）の集計です。人数入力済は、参加人数が入力されている行事の数です。' if csv_ready else ""
+    stats_people_th = '<th>参加人数</th><th>うち会員外</th><th>人数入力済</th><th>ミーティングスペース</th>' if csv_ready else ""
+    stats_people_note = '参加人数は入力フォームの回答（行事ごとに最新の回答を採用）の集計です。人数入力済は、参加人数が入力されている行事の数です。ミーティングスペースは、利用のたびの入力を合算した利用者数です。' if csv_ready else ""
     stats_card = (
         '<button type="button" class="action-card stats" onclick="document.getElementById(\'statsModal\').classList.add(\'open\')">'
         '📊 月次利用サマリ<span>クリックで月別の利用状況を開きます</span></button>'
@@ -585,6 +646,23 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
         month_entered = [e for e in month_done if participant_key(e) in participants]
         month_people = sum(participants[participant_key(e)][0] for e in month_entered)
         month_nonmem = sum(participants[participant_key(e)][1] for e in month_entered)
+        mlink = meeting_form_link()
+        _m_month = [v for d, v in meeting_by_date.items() if d[:7] == run_ym]
+        m_people = sum(v[0] for v in _m_month)
+        m_uses = sum(v[1] for v in _m_month)
+        meeting_block = ""
+        if mlink:
+            meeting_block = (
+                '<div class="qr-date">ミーティングスペース（利用のたびに入力）</div>'
+                '<div class="qr-item">'
+                f'<div class="qr-fig big">{_qr_svg(mlink)}</div>'
+                '<div class="qr-meta">'
+                '<div class="qr-ev">ミーティングスペース利用者数の入力</div>'
+                f'<div class="qr-org">今月（{run_date.month}月）の利用者数：{m_people}人（{m_uses}件の入力）　'
+                f'<a class="btn-link" href="{_html_escape(mlink)}" target="_blank" rel="noopener">入力フォームを開く</a></div>'
+                '<div class="qr-org">利用のたびに人数を入力してください（分かれば団体名も）。日付は空欄でOKです（送信した日の扱いになります）。さかのぼって入力するときは、日付欄にその日を入れてください。</div>'
+                '</div></div>'
+            )
         past_missing = [e for e in month_done if participant_key(e) not in participants]
         past_missing.sort(key=lambda e: (e["date"], e.get("time", ""), e["id"]))
         pm_items = []
@@ -614,13 +692,14 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             '<h3 class="people-h3">直近8日間の行事（QRコード）</h3>'
             '<p class="people-note">QRコードを読み取るか「入力フォームを開く」を押すと、その行事の情報（日付・行事名・団体名）が入ったフォームが開きます。総参加数と会員外人数だけ入力して送信してください。</p>'
             '<div id="peoplePrint">'
+            + meeting_block
             + "".join(qr_blocks)
             + '</div>'
             '<p><button type="button" class="btn-print" onclick="printQrSheet()">🖨 QRシートを印刷用に開く</button></p>'
             + pm_html
             + '</div></div>'
             '<script>function printQrSheet(){var s=document.getElementById("peoplePrint").innerHTML;var w=window.open("","_blank");if(!w){alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");return;}'
-            'w.document.write("<!DOCTYPE html><html lang=\\"ja\\"><head><meta charset=\\"utf-8\\"><title>参加人数入力QRシート</title><style>body{font-family:sans-serif;margin:16px}.qr-item{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ccc;padding:8px 0}.qr-fig svg{width:96px;height:96px}.qr-date{font-weight:bold;margin-top:14px}.qr-ev{font-weight:bold}.qr-org{font-size:12px;color:#555}.qr-done{color:#15803d;font-weight:bold}a{display:none}</style></head><body><h1>参加人数入力QRシート</h1>"+s+"</body></html>");w.document.close();}</script>'
+            'w.document.write("<!DOCTYPE html><html lang=\\"ja\\"><head><meta charset=\\"utf-8\\"><title>参加人数入力QRシート</title><style>body{font-family:sans-serif;margin:16px}.qr-item{display:flex;gap:12px;align-items:center;border-bottom:1px solid #ccc;padding:8px 0}.qr-fig svg{width:96px;height:96px}.qr-fig.big svg{width:140px;height:140px}.qr-date{font-weight:bold;margin-top:14px}.qr-ev{font-weight:bold}.qr-org{font-size:12px;color:#555}.qr-done{color:#15803d;font-weight:bold}a{display:none}</style></head><body><h1>参加人数入力QRシート</h1>"+s+"</body></html>");w.document.close();}</script>'
         )
     new_groups = {}
     for e in events:
@@ -738,6 +817,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .qr-date {{ font-weight: bold; margin: 12px 0 4px; color: #1e293b; }}
   .qr-item {{ display: flex; gap: 12px; align-items: center; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: #fff; }}
   .qr-fig svg {{ width: 84px; height: 84px; display: block; }}
+  .qr-fig.big svg {{ width: 120px; height: 120px; }}
   .qr-ev {{ font-weight: bold; }}
   .qr-org {{ font-size: 0.82rem; color: #64748b; margin-top: 2px; }}
   .qr-done {{ color: #15803d; font-weight: bold; }}
