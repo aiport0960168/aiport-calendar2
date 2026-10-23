@@ -325,6 +325,129 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             + "".join(org_items)
             + '</div></div>'
         )
+    miss_fields = [("place", "会場"), ("fee", "料金"), ("org", "団体名"), ("time", "時間"), ("title", "タイトル")]
+    miss_counts = {label: 0 for _, label in miss_fields}
+    miss_events = []
+    for e in events:
+        miss = [label for key, label in miss_fields if not (e.get(key) or "").strip()]
+        if miss:
+            for label in miss:
+                miss_counts[label] += 1
+            miss_events.append((e, miss))
+    missing_card = ""
+    if miss_events:
+        print(f"missing-field check: {len(miss_events)} events have empty fields")
+        miss_summary = "・".join(f"{label}{miss_counts[label]}件" for _, label in miss_fields if miss_counts[label])
+        miss_items = []
+        for e, miss in sorted(miss_events, key=lambda x: (x[0]["date"], x[0]["time"], x[0]["id"])):
+            dd = datetime.date.fromisoformat(e["date"])
+            badges = "".join(f'<span class="badge badge-miss">{_html_escape(label)}</span> ' for label in miss)
+            miss_items.append(
+                '<div class="dup-item miss-item">'
+                f'<div class="dup-date">{dd.month}月{dd.day}日（{e.get("weekday", "")}） {badges}</div>'
+                f'<div class="dup-ev">{_html_escape(e.get("time", ""))}　{_html_escape(e.get("title", ""))}（{_html_escape(e.get("org", ""))}）</div>'
+                '</div>'
+            )
+        missing_card = (
+            '<button type="button" class="alert-chip miss" onclick="document.getElementById(\'missModal\').classList.add(\'open\')">'
+            f'<span>未入力チェック</span><span class="chip-open">{len(miss_events)}件の行事に空欄があります（クリックで詳細）</span></button>'
+            '<div class="modal-overlay" id="missModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+            '<div class="modal-box">'
+            '<div class="modal-head">'
+            f'<h2 class="h2-miss">未入力チェック（{len(miss_events)}件）</h2>'
+            '<button type="button" class="modal-close" onclick="document.getElementById(\'missModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
+            f'<p class="miss-note">項目別の空欄件数：{miss_summary}。バッジは空欄の項目を示します。元の申込内容を確認して、管理システム側で補ってください。</p>'
+            + "".join(miss_items)
+            + '</div></div>'
+        )
+    monthly_stats = {}
+    for e in events:
+        ym = e["date"][:7]
+        st = monthly_stats.setdefault(ym, {"total": 0, "event": 0, "seminar": 0, "both": 0, "other": 0, "cancelled": 0, "orgs": set()})
+        st["total"] += 1
+        room = e.get("room", "")
+        if room == "イベントコーナー・会議セミナー室":
+            st["both"] += 1
+        elif room == "イベントコーナー":
+            st["event"] += 1
+        elif room == "会議セミナー室":
+            st["seminar"] += 1
+        else:
+            st["other"] += 1
+        if "中止" in e.get("title", ""):
+            st["cancelled"] += 1
+        org_name = (e.get("org") or "").strip()
+        if org_name:
+            st["orgs"].add(org_name)
+    stats_rows = []
+    for ym in sorted(monthly_stats.keys()):
+        st = monthly_stats[ym]
+        y_str, m_str = ym.split("-")
+        stats_rows.append(
+            f'<tr><td class="date-cell">{int(y_str)}年{int(m_str)}月</td>'
+            f'<td>{st["total"]}</td><td>{st["event"]}</td><td>{st["seminar"]}</td>'
+            f'<td>{st["both"]}</td><td>{st["other"]}</td><td>{len(st["orgs"])}</td><td>{st["cancelled"]}</td></tr>'
+        )
+    stats_card = (
+        '<div class="card stats-card">'
+        '<h2>📊 月次利用サマリ</h2>'
+        '<p class="stats-note">現在の掲載データからの自動集計です。行事数は中止分も含みます。利用団体数は団体名の種類数（空欄を除く）です。</p>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>月</th><th>行事数</th><th>イベントコーナー</th><th>会議セミナー室</th><th>両方</th><th>その他</th><th>利用団体数</th><th>中止</th>'
+        '</tr></thead><tbody>'
+        + "".join(stats_rows)
+        + '</tbody></table></div></div>'
+    )
+    new_groups = {}
+    for e in events:
+        fs = e.get("firstSeen")
+        if fs:
+            new_groups.setdefault(fs, []).append(e)
+    new_entries_card = ""
+    if new_groups:
+        total_new = sum(len(v) for v in new_groups.values())
+        print(f"new entries: {total_new} events in {len(new_groups)} firstSeen groups")
+        group_html = []
+        for fs_date in sorted(new_groups.keys(), reverse=True):
+            g = sorted(new_groups[fs_date], key=lambda x: (x["date"], x["time"], x["id"]))
+            d_fs = datetime.date.fromisoformat(fs_date)
+            by_date = {}
+            for e in g:
+                by_date[e["date"]] = by_date.get(e["date"], 0) + 1
+            summary_parts = []
+            for dstr in sorted(by_date.keys()):
+                dd = datetime.date.fromisoformat(dstr)
+                summary_parts.append(f"{dd.month}/{dd.day}\u306b{by_date[dstr]}\u4ef6")
+            ev_lines = []
+            for e in g:
+                dd = datetime.date.fromisoformat(e["date"])
+                cancelled_mark = ""
+                if "\u4e2d\u6b62" in e.get("title", ""):
+                    cancelled_mark = ' <span class="badge badge-dup">\u4e2d\u6b62</span>'
+                ev_lines.append(
+                    f'<div class="dup-ev">{dd.month}/{dd.day}\uff08{e.get("weekday", "")}\uff09 '
+                    f'{_html_escape(e.get("time", ""))}\u3000{_html_escape(e.get("title", ""))}'
+                    f'\uff08{_html_escape(e.get("org", ""))}\uff09 [{_html_escape(e.get("room", ""))}]{cancelled_mark}</div>'
+                )
+            group_html.append(
+                '<div class="dup-item new-item">'
+                f'<div class="dup-date">{d_fs.month}\u6708{d_fs.day}\u65e5\u306b\u521d\u78ba\u8a8d\uff08{len(g)}\u4ef6\uff09</div>'
+                f'<div class="dup-ev">\u5bfe\u8c61\u65e5: {"\u3001".join(summary_parts)}</div>'
+                + "".join(ev_lines)
+                + '</div>'
+            )
+        new_entries_card = (
+            '<button type="button" class="alert-chip new" onclick="document.getElementById(\'newModal\').classList.add(\'open\')">'
+            f'<span>\u65b0\u898f\u5165\u529b\u30c1\u30a7\u30c3\u30af</span><span class="chip-open">{total_new}\u4ef6\u3042\u308a\u307e\u3059\uff08\u30af\u30ea\u30c3\u30af\u3067\u8a73\u7d30\uff09</span></button>'
+            '<div class="modal-overlay" id="newModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+            '<div class="modal-box">'
+            '<div class="modal-head">'
+            f'<h2 class="h2-new">\u65b0\u898f\u5165\u529b\u30c1\u30a7\u30c3\u30af\uff08{total_new}\u4ef6\uff09</h2>'
+            '<button type="button" class="modal-close" onclick="document.getElementById(\'newModal\').classList.remove(\'open\')">\u2715 \u9589\u3058\u308b</button></div>'
+            '<p class="new-note">\u65b0\u3057\u304f\u30ab\u30ec\u30f3\u30c0\u30fc\u306b\u73fe\u308c\u305f\u4e88\u5b9a\u3092\u3001\u521d\u3081\u3066\u78ba\u8a8d\u3067\u304d\u305f\u65e5\uff08\u521d\u78ba\u8a8d\u65e5\uff09\u3054\u3068\u306b\u307e\u3068\u3081\u3066\u3044\u307e\u3059\u3002\u624b\u5165\u529b\u76f4\u5f8c\u306e\u898b\u76f4\u3057\u306b\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002\u8a18\u9332\u306f\u3053\u306e\u6a5f\u80fd\u306e\u5c0e\u5165\u65e5\u304b\u3089\u59cb\u307e\u3063\u3066\u3044\u307e\u3059\u3002</p>'
+            + "".join(group_html)
+            + '</div></div>'
+        )
     radio_label = ""
     radio_card = ""
     radio_note = ""
@@ -375,6 +498,18 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .alert-chip {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 16px; border-radius: 10px; margin-bottom: 10px; cursor: pointer; font-weight: bold; font-size: 0.95rem; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
   .alert-chip.dup {{ background: #fef2f2; border: 1px solid #fecaca; border-left: 6px solid #dc2626; color: #b91c1c; }}
   .alert-chip.org {{ background: #fffbeb; border: 1px solid #fde68a; border-left: 6px solid #d97706; color: #b45309; }}
+  .alert-chip.new {{ background: #eff6ff; border: 1px solid #bfdbfe; border-left: 6px solid #2563eb; color: #1d4ed8; }}
+  .h2-new {{ color: #1d4ed8; }}
+  .new-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #1e3a8a; }}
+  .dup-item.new-item {{ border-color: #bfdbfe; }}
+  .stats-card {{ padding: 18px; margin-bottom: 16px; }}
+  .stats-card h2 {{ margin: 0 0 6px; font-size: 1.15rem; color: #1e293b; }}
+  .stats-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #64748b; }}
+  .alert-chip.miss {{ background: #f0fdfa; border: 1px solid #99f6e4; border-left: 6px solid #0d9488; color: #0f766e; }}
+  .h2-miss {{ color: #0f766e; }}
+  .miss-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #134e4a; }}
+  .dup-item.miss-item {{ border-color: #99f6e4; }}
+  .badge-miss {{ background: #ccfbf1; color: #0f766e; }}
   .alert-chip:hover {{ box-shadow: 0 4px 14px rgba(15,23,42,0.12); }}
   .chip-open {{ font-size: 0.82rem; white-space: nowrap; }}
   .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 50; padding: 20px 12px; }}
@@ -489,6 +624,10 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
 
   {org_check_card}
 
+  {new_entries_card}
+
+  {missing_card}
+
   <div class="card avail-card">
     <div class="avail-head">
       <h2>🗓 空き状況（日付で確認）</h2>
@@ -519,6 +658,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
       </div>
     </div>
   </div>
+
+  {stats_card}
 
   <div class="filters card">
     <div class="filters-head">
@@ -883,6 +1024,8 @@ def main():
     with open(CACHE_PATH, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
+    apply_first_seen(all_events, now.strftime("%Y-%m-%d"))
+
     availability = {}
     if all_events:
         last_date = max(datetime.date.fromisoformat(e["date"]) for e in all_events)
@@ -1015,6 +1158,35 @@ def _radio_monday(now):
 
 
 RADIO_HISTORY_PATH = "radio_history.json"
+FIRST_SEEN_PATH = "first_seen.json"
+
+
+def apply_first_seen(events, today_str):
+    """Attach firstSeen (the JST date an event URL first appeared) to each event.
+
+    State is kept in first_seen.json (committed back to the repo by Actions).
+    On the very first run (no state file), every current event is seeded with
+    None ("before tracking started") so nothing is reported as new; from the
+    second run on, URLs that appear for the first time get today's date.
+    """
+    first_seen = {}
+    exists = os.path.exists(FIRST_SEEN_PATH)
+    if exists:
+        try:
+            with open(FIRST_SEEN_PATH, "r", encoding="utf-8") as f:
+                first_seen = json.load(f)
+        except Exception as e:
+            print(f"first_seen load failed: {e}")
+            exists = False
+    for e in events:
+        if e["url"] not in first_seen:
+            first_seen[e["url"]] = today_str if exists else None
+        e["firstSeen"] = first_seen[e["url"]]
+    with open(FIRST_SEEN_PATH, "w", encoding="utf-8") as f:
+        json.dump(first_seen, f, ensure_ascii=False, indent=2)
+    n_new = sum(1 for e in events if e.get("firstSeen") == today_str)
+    print(f"firstSeen: {n_new} events first confirmed today")
+    return first_seen
 RADIO_GREEN = RGBColor(0x00, 0xB0, 0x50)
 RADIO_RED = RGBColor(0xFF, 0x00, 0x00)
 RADIO_FONT = "Meiryo UI"
