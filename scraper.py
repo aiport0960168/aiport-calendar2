@@ -289,6 +289,16 @@ def participant_key(e):
     return hashlib.sha1(base.encode("utf-8")).hexdigest()[:10]
 
 
+def _qr_quote(v):
+    # Keep Japanese text raw (UTF-8) instead of percent-encoding it, so the
+    # QR payload stays short and the code stays low-density / easy to scan.
+    # Only the characters that would break the query string are escaped.
+    # The event key and date are ASCII, so matching works even if a scanner
+    # mangles the Japanese display text.
+    return (str(v).replace("%", "%25").replace("&", "%26").replace("=", "%3D")
+            .replace("#", "%23").replace("+", "%2B").replace(" ", "%20"))
+
+
 def participant_form_link(e):
     # Google Forms URL with the event's date / title / org / key prefilled.
     if not PARTICIPANT_FORM_BASE or not all(PARTICIPANT_ENTRY.values()):
@@ -299,7 +309,7 @@ def participant_form_link(e):
         (PARTICIPANT_ENTRY["org"], e.get("org", "")),
         (PARTICIPANT_ENTRY["key"], participant_key(e)),
     ]
-    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params)
+    qs = "&".join(f"{k}={_qr_quote(v)}" for k, v in params)
     sep = "&" if "?" in PARTICIPANT_FORM_BASE else "?"
     return PARTICIPANT_FORM_BASE + sep + "usp=pp_url&" + qs
 
@@ -312,7 +322,7 @@ def meeting_form_link():
         (PARTICIPANT_ENTRY["title"], MEETING_TITLE),
         (PARTICIPANT_ENTRY["key"], MEETING_KEY),
     ]
-    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params)
+    qs = "&".join(f"{k}={_qr_quote(v)}" for k, v in params)
     sep = "&" if "?" in PARTICIPANT_FORM_BASE else "?"
     return PARTICIPANT_FORM_BASE + sep + "usp=pp_url&" + qs
 
@@ -610,7 +620,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             if segno is None:
                 return ""
             try:
-                return segno.make(link, error="m").svg_inline(scale=3, border=1, dark="#1e293b")
+                return segno.make(link, error="m").svg_inline(scale=3, border=4, dark="#000000")
             except Exception:
                 return ""
 
