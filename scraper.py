@@ -398,14 +398,19 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
             f'<td>{st["both"]}</td><td>{st["other"]}</td><td>{len(st["orgs"])}</td><td>{st["cancelled"]}</td></tr>'
         )
     stats_card = (
-        '<div class="card stats-card">'
-        '<h2>📊 月次利用サマリ</h2>'
+        '<button type="button" class="action-card stats" onclick="document.getElementById(\'statsModal\').classList.add(\'open\')">'
+        '📊 月次利用サマリ<span>クリックで月別の利用状況を開きます</span></button>'
+        '<div class="modal-overlay" id="statsModal" onclick="if(event.target===this)this.classList.remove(\'open\')">'
+        '<div class="modal-box wide">'
+        '<div class="modal-head">'
+        '<h2 class="h2-stats">月次利用サマリ</h2>'
+        '<button type="button" class="modal-close" onclick="document.getElementById(\'statsModal\').classList.remove(\'open\')">✕ 閉じる</button></div>'
         '<p class="stats-note">現在の掲載データからの自動集計です。行事数は中止分も含みます。利用団体数は団体名の種類数（空欄を除く）です。</p>'
         '<div class="table-wrap"><table><thead><tr>'
         '<th>月</th><th>行事数</th><th>イベントコーナー</th><th>会議セミナー室</th><th>両方</th><th>その他</th><th>利用団体数</th><th>中止</th>'
         '</tr></thead><tbody>'
         + "".join(stats_rows)
-        + '</tbody></table></div></div>'
+        + '</tbody></table></div></div></div>'
     )
     new_groups = {}
     for e in events:
@@ -503,6 +508,8 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .action-card.docx {{ border-left-color: #16a34a; }}
   .action-card.excel {{ border-left-color: #217346; }}
   .action-card.radio {{ border-left-color: #d97706; }}
+  .action-card.stats {{ border-left-color: #7c3aed; }}
+  button.action-card {{ font: inherit; text-align: left; cursor: pointer; border-top: none; border-right: none; border-bottom: none; width: 100%; }}
   .info-box {{ background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }}
   .info-box p {{ margin: 3px 0; font-size: 0.8rem; color: #475569; }}
   .alert-chip {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 16px; border-radius: 10px; margin-bottom: 10px; cursor: pointer; font-weight: bold; font-size: 0.95rem; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }}
@@ -512,9 +519,9 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
   .h2-new {{ color: #1d4ed8; }}
   .new-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #1e3a8a; }}
   .dup-item.new-item {{ border-color: #bfdbfe; }}
-  .stats-card {{ padding: 18px; margin-bottom: 16px; }}
-  .stats-card h2 {{ margin: 0 0 6px; font-size: 1.15rem; color: #1e293b; }}
   .stats-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #64748b; }}
+  .h2-stats {{ color: #6d28d9; }}
+  .modal-box.wide {{ max-width: 920px; }}
   .alert-chip.miss {{ background: #f0fdfa; border: 1px solid #99f6e4; border-left: 6px solid #0d9488; color: #0f766e; }}
   .h2-miss {{ color: #0f766e; }}
   .miss-note {{ margin: 0 0 10px; font-size: 0.82rem; color: #134e4a; }}
@@ -621,6 +628,7 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
     <a class="action-card docx" href="weekly.docx" download>📄 週報ダウンロード（Word）<span>対象: {week_label}分</span></a>
     <a class="action-card excel" href="newsletter.xlsx" download>📊 あいぽーと通信用カレンダー（Excel）<span>対象: {period_label}分</span></a>
     {radio_card}
+    {stats_card}
   </div>
 
   <div class="info-box">
@@ -668,8 +676,6 @@ def generate_html(events, updated_str, week_start, week_end, period_start, perio
       </div>
     </div>
   </div>
-
-  {stats_card}
 
   <div class="filters card">
     <div class="filters-head">
