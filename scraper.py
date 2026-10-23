@@ -35,14 +35,20 @@ HTML_PATH = "index.html"
 # ---- Participants (Google Forms) ----
 # Fill these three after creating the input form (see the setup guide).
 # While empty, the participants feature stays off and the page is unchanged.
-PARTICIPANT_FORM_BASE = os.environ.get("AIPORT_PARTICIPANT_FORM_BASE", "")
+PARTICIPANT_FORM_BASE = os.environ.get(
+    "AIPORT_PARTICIPANT_FORM_BASE",
+    "https://docs.google.com/forms/d/e/1FAIpQLSf2JkhmXlmeohGnR_iF85LoZyI66Xeh086NkwxY1fXbSb4M-A/viewform",
+)
 PARTICIPANT_ENTRY = {
-    "date": os.environ.get("AIPORT_PARTICIPANT_ENTRY_DATE", ""),
-    "title": os.environ.get("AIPORT_PARTICIPANT_ENTRY_TITLE", ""),
-    "org": os.environ.get("AIPORT_PARTICIPANT_ENTRY_ORG", ""),
-    "key": os.environ.get("AIPORT_PARTICIPANT_ENTRY_KEY", ""),
+    "date": os.environ.get("AIPORT_PARTICIPANT_ENTRY_DATE", "entry.385141083"),
+    "title": os.environ.get("AIPORT_PARTICIPANT_ENTRY_TITLE", "entry.1526388592"),
+    "org": os.environ.get("AIPORT_PARTICIPANT_ENTRY_ORG", "entry.18611752"),
+    "key": os.environ.get("AIPORT_PARTICIPANT_ENTRY_KEY", "entry.1974106417"),
 }
-PARTICIPANT_CSV_URL = os.environ.get("AIPORT_PARTICIPANT_CSV_URL", "")
+PARTICIPANT_CSV_URL = os.environ.get(
+    "AIPORT_PARTICIPANT_CSV_URL",
+    "https://docs.google.com/spreadsheets/d/13jG9rfVADRq0T77W7n2h5g2ORid_mi_1lV6_IBXRlCo/export?format=csv&gid=1403488226",
+)
 
 # sumitsuki-kakko (U+3010 / U+3011) built via chr() to keep this file ASCII-safe
 LB = chr(0x3010)
